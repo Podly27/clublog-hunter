@@ -107,7 +107,27 @@ final class ActionButton: NSButton {
     @objc private func performAction() { actionBlock() }
 }
 
+private enum Appearance: String, CaseIterable {
+    case system = "System"
+    case light = "Light"
+    case dark = "Dark"
+
+    var nativeAppearance: NSAppearance? {
+        switch self {
+        case .system: return nil
+        case .light: return NSAppearance(named: .aqua)
+        case .dark: return NSAppearance(named: .darkAqua)
+        }
+    }
+}
+
 final class Delegate: NSObject, NSApplicationDelegate {
+    private let appearanceKey = "appearance"
+    private var selectedAppearance: Appearance {
+        UserDefaults.standard.string(forKey: appearanceKey)
+            .flatMap(Appearance.init(rawValue:)) ?? .system
+    }
+
     let worker = Worker()
     var window: NSWindow!
     let tabs = NSTabView()
@@ -147,6 +167,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var simulated = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.appearance = selectedAppearance.nativeAppearance
         window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 690),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
@@ -234,8 +255,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    func label(_ text: String, width: CGFloat? = nil) -> NSTextField {
+    func label(_ text: String, width: CGFloat? = nil, alignment: NSTextAlignment = .left) -> NSTextField {
         let field = NSTextField(labelWithString: text)
+        field.alignment = alignment
         if let width { field.widthAnchor.constraint(equalToConstant: width).isActive = true }
         return field
     }
@@ -247,8 +269,10 @@ final class Delegate: NSObject, NSApplicationDelegate {
             ActionButton("Refresh spots") { self.refreshSpots(manual: true) }
         ], vertical: false)
         let heading = stack([
-            label("Band", width: 68), label("CW", width: 125),
-            label("Phone", width: 125), label("Data / FT8", width: 125)
+            label("Band", width: 68, alignment: .center),
+            label("CW", width: 125, alignment: .center),
+            label("Phone", width: 125, alignment: .center),
+            label("Data / FT8", width: 125, alignment: .center)
         ], vertical: false)
         let table = stack([heading], spacing: 2)
         for band in bands {
@@ -296,6 +320,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func buildSetup() -> NSStackView {
         let layout = stack([])
+        let appearance = NSPopUpButton()
+        appearance.addItems(withTitles: Appearance.allCases.map(\.rawValue))
+        appearance.selectItem(withTitle: selectedAppearance.rawValue)
+        appearance.target = self
+        appearance.action = #selector(changeAppearance(_:))
+        layout.addArrangedSubview(stack([label("Appearance", width: 170), appearance], vertical: false))
+
         let entries: [(String, NSTextField)] = [
             ("My callsign", operatorCall), ("Watched callsigns", targets),
             ("Club Log API token", key), ("CI-V port", port),
@@ -319,6 +350,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
             }
         ], vertical: false))
         return layout
+    }
+
+    @objc private func changeAppearance(_ sender: NSPopUpButton) {
+        guard let title = sender.titleOfSelectedItem, let appearance = Appearance(rawValue: title) else { return }
+        UserDefaults.standard.set(appearance.rawValue, forKey: appearanceKey)
+        NSApp.appearance = appearance.nativeAppearance
     }
 
     func run(_ action: String, _ data: [String: Any] = [:], completion: ((Any?) -> Void)? = nil) {
@@ -406,11 +443,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
         for (row, band) in bands.enumerated() {
             for (column, mode) in modes.enumerated() {
                 let hit = matches?.contains("\(band):\(mode)") == true
-                let saved = slots["\(expedition):\(band):\(mode)"]?["frequency"] ?? "—"
+                let saved = slots["\(expedition):\(band):\(mode)"]?["frequency"]
                 let button = rows[row][column]
                 let spot = tableSpot(band, mode)
                 let frequency = spot?["frequency"] as? String
-                button.title = (hit ? "✓ " : "") + (frequency.map { "● \($0)" } ?? saved)
+                let spotTitle = frequency.flatMap(Double.init).map { String(format: "%.3f", $0) }
+                button.title = spotTitle ?? saved ?? (hit ? "" : "—")
                 let workedColor = NSColor(srgbRed: 0.55, green: 0.83, blue: 0.61, alpha: 1)
                 let qrvColor = NSColor(srgbRed: 1, green: 0.84, blue: 0.39, alpha: 1)
                 let background = hit ? workedColor : (spot != nil ? qrvColor : nil)
