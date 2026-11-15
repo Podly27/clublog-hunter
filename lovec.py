@@ -161,14 +161,18 @@ class Controller:
                     self.rejected_keys.add(key)
                 raise ValueError(club_log_error(exc, key)) from None
         if action == "radio_status":
-            if not isinstance(self.radio, Radio):
-                return False
+            if self.radio is None:
+                return {"connected": False}
             try:
-                self.radio.frequency()
+                hz = self.radio.frequency()
             except (OSError, ValueError):
                 self.close()
-                return False
-            return True
+                return {"connected": False}
+            try:
+                mode = self.radio.mode_group()
+            except (OSError, ValueError):
+                mode = None
+            return {"connected": True, "frequencyHz": hz, "mode": mode}
         if action == "disconnect":
             self.close()
             return "Radio disconnected."

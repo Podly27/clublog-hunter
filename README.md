@@ -6,11 +6,11 @@ ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with 
 
 ## Screenshots
 
-The Overview and CW tabs shown with sample data.
+ClubLog Hunter 0.3.5 in simulation with sample data. The Overview shows the **Last contacts** panel filtered to **12 m CW**.
 
 | Overview | CW memories |
 | --- | --- |
-| ![Overview with frequencies and worked slots](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
+| ![Overview with live frequencies, worked slots, and recent 12 m CW contacts](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
 
 ## Build and launch
 
@@ -34,6 +34,7 @@ The build produces a locally signed app bundle.
 - Enter your callsign and a Club Log REST API token in **Settings**, then click **Save settings**. Create the token in Club Log under **Settings → API**. Hunter stores it in the macOS Keychain.
 - The expedition menu loads callsigns from Club Log with a QSO in the last seven days. Hunter restores the last selected expedition when it is available. The manually configured callsigns are available at startup before the first successful fetch.
 - **Overview** reads active band and mode combinations and their latest reported frequencies from the public Club Log Livestream. The app checks the page every five seconds. **Refresh live activity** checks immediately, and **Livestream web** opens the same page in your browser.
+- **Last contacts** lists recent Livestream QSOs for the selected expedition, newest first. It follows the radio's band and Club Log mode group (CW, Phone, or Data). The app checks the radio every five seconds, including when you retune with the radio's controls. Each row shows the callsign, frequency in MHz when reported, and the logged mode. A dash marks a contact whose frequency was omitted.
 - Yellow cells show live activity. A cell displays **QRV** when the livestream reports activity without a frequency. Green cells show your worked slots and take precedence over yellow. The live indication disappears when the slot goes inactive or live data becomes unavailable.
 - Click a live frequency to tune **VFO A**. Click **QRV** to enter a frequency when the livestream omits it. While that slot is active, the saved frequency appears in the cell and can be clicked to tune. Hover over the cell to see that the frequency was entered manually. Option-click to edit or remove the saved frequency.
 - In **Settings → Appearance**, select **Light**, **Dark**, or **System** to follow the macOS setting. Hunter remembers your choice.

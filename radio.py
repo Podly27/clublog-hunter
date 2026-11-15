@@ -95,6 +95,19 @@ class Radio:
     def frequency(self):
         return decode_frequency(self.command(b"\x03", b"\x03"))
 
+    def mode_group(self):
+        reply = self.command(b"\x26\x00", b"\x26\x00")
+        if len(reply) != 3:
+            raise ValueError("The radio returned an unexpected mode format.")
+        mode, data, _ = reply
+        if mode in (3, 7):
+            return "C"
+        if data or mode in (4, 8, 0x17, 0x18):
+            return "D"
+        if mode in (0, 1, 2, 5, 6):
+            return "P"
+        return None
+
     def require_rx(self):
         if self.command(b"\x1c\x00", b"\x1c\x00") != b"\x00":
             raise ValueError("The radio is transmitting or did not report RX mode.")
@@ -153,6 +166,9 @@ class Simulator:
 
     def tune(self, hz, mode):
         self.hz, self.mode = hz, mode
+
+    def mode_group(self):
+        return {"CW": "C", "FT8": "D", "USB": "P", "LSB": "P"}[self.mode]
 
     def read_memory(self, index):
         return self.memories[index - 1]

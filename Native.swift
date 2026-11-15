@@ -122,7 +122,7 @@ private enum Appearance: String, CaseIterable {
     }
 }
 
-final class Delegate: NSObject, NSApplicationDelegate {
+final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NSTableViewDelegate {
     private let appearanceKey = "appearance"
     private var selectedAppearance: Appearance {
         UserDefaults.standard.string(forKey: appearanceKey)
@@ -150,6 +150,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
     private var livestream: WKWebView?
     private var streamCall = ""
     private var liveSlots: [String: [String: String]] = [:]
+    private let contactsTable = NSTableView()
+    private let contactsFilter = NSTextField(labelWithString: "Connect radio or start simulation")
+    private var recentContacts: [[String: String]] = []
+    private var filteredContacts: [[String: String]] = []
+    private var tunedBand: Int?
+    private var tunedMode: String?
     private var liveSlotsValidUntil = Date.distantPast
     private var streamReadInProgress = false
     private var retryStreamAfter = Date.distantPast
@@ -172,11 +178,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = selectedAppearance.nativeAppearance
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 780, height: 690),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 930, height: 690),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "ClubLog Hunter · IC-7300MK2"
-        window.minSize = NSSize(width: 720, height: 650)
+        window.minSize = NSSize(width: 880, height: 650)
         window.center()
         let spacer = NSView()
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -289,11 +295,70 @@ final class Delegate: NSObject, NSApplicationDelegate {
             rows.append(buttons)
             table.addArrangedSubview(stack([label("\(band) m", width: 68)] + buttons, vertical: false))
         }
-        let layout = stack([head, table, log])
-        layout.setCustomSpacing(18, after: head)
-        layout.setCustomSpacing(12, after: table)
+        let overview = stack([table, log], spacing: 12)
+        overview.alignment = .centerX
+        let columns = stack([overview, buildContacts()], vertical: false, spacing: 24)
+        columns.alignment = .top
+        let layout = stack([head, columns], spacing: 18)
         layout.alignment = .centerX
         return layout
+    }
+
+    private func buildContacts() -> NSStackView {
+        let title = label("Last contacts")
+        title.font = .boldSystemFont(ofSize: NSFont.systemFontSize)
+        contactsTable.dataSource = self
+        contactsTable.delegate = self
+        contactsTable.usesAlternatingRowBackgroundColors = true
+        for (key, title, width) in [("call", "Call", 105.0), ("frequency", "MHz", 78), ("mode", "Mode", 64)] {
+            let column = NSTableColumn(identifier: NSUserInterfaceItemIdentifier(key))
+            column.title = title
+            column.width = width
+            contactsTable.addTableColumn(column)
+        }
+        let scroll = NSScrollView()
+        scroll.documentView = contactsTable
+        scroll.hasVerticalScroller = true
+        scroll.borderType = .bezelBorder
+        scroll.widthAnchor.constraint(equalToConstant: 300).isActive = true
+        scroll.heightAnchor.constraint(equalToConstant: 285).isActive = true
+        return stack([title, contactsFilter, scroll])
+    }
+
+    func numberOfRows(in tableView: NSTableView) -> Int { filteredContacts.count }
+
+    func tableView(_ tableView: NSTableView, viewFor column: NSTableColumn?, row: Int) -> NSView? {
+        guard let key = column?.identifier.rawValue else { return nil }
+        return label(filteredContacts[row][key] ?? "—")
+    }
+
+    private func refreshContacts() {
+        let modeNames = ["C": "CW", "P": "Phone", "D": "Data"]
+        let contacts: [[String: String]]
+        if let tunedBand, let tunedMode, let name = modeNames[tunedMode] {
+            contacts = recentContacts.filter { $0["band"] == String(tunedBand) && $0["group"] == tunedMode }
+            contactsFilter.stringValue = "\(tunedBand) m · \(name)" + (contacts.isEmpty ? " · No recent contacts" : "")
+        } else {
+            contacts = []
+            contactsFilter.stringValue = radioConnected || simulated ? "Waiting for a supported band and mode" : "Connect radio or start simulation"
+        }
+        if contacts != filteredContacts {
+            filteredContacts = contacts
+            contactsTable.reloadData()
+            if !contacts.isEmpty { contactsTable.scrollRowToVisible(0) }
+        }
+    }
+
+    // Frequency ranges in MHz from the ADIF Band Enumeration.
+    private func updateTunedSlot(hz: Int?, mode: String?) {
+        let ranges: [(Int, ClosedRange<Double>)] = [
+            (160, 1.8...2), (80, 3.5...4), (60, 5.06...5.45), (40, 7...7.3),
+            (30, 10.1...10.15), (20, 14...14.35), (17, 18.068...18.168), (15, 21...21.45),
+            (12, 24.890...24.99), (10, 28...29.7), (6, 50...54), (4, 70...71)
+        ]
+        tunedBand = hz.flatMap { frequency in ranges.first { $0.1.contains(Double(frequency) / 1_000_000) }?.0 }
+        tunedMode = mode
+        refreshContacts()
     }
 
     func buildMemories() -> NSStackView {
@@ -350,6 +415,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     self.simulated = false
                     self.radioConnected = false
                     self.updateRadioIndicator()
+                    self.updateTunedSlot(hz: nil, mode: nil)
                 }
             }
         ], vertical: false))
@@ -384,6 +450,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             self.simulated = simulate
             self.radioConnected = !simulate
             self.updateRadioIndicator()
+            self.checkRadioConnection()
             self.readMemories()
         }
     }
@@ -394,12 +461,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     func checkRadioConnection() {
-        guard radioConnected, !busy, !radioCheckInProgress else { return }
+        guard (radioConnected || simulated), !busy, !radioCheckInProgress else { return }
         radioCheckInProgress = true
         worker.request("radio_status", [:]) { response in
             self.radioCheckInProgress = false
-            guard self.radioConnected, response["result"] as? Bool != true else { return }
+            guard self.radioConnected || self.simulated else { return }
+            let result = response["result"] as? [String: Any]
+            if result?["connected"] as? Bool == true {
+                self.updateTunedSlot(hz: result?["frequencyHz"] as? Int, mode: result?["mode"] as? String)
+                return
+            }
             self.radioConnected = false
+            self.simulated = false
+            self.updateTunedSlot(hz: nil, mode: nil)
             self.updateRadioIndicator()
             self.status.stringValue = "The radio stopped responding."
         }
@@ -487,6 +561,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
             livestream = nil
             streamCall = call
             liveSlots = [:]
+            recentContacts = []
+            refreshContacts()
             liveSlotsValidUntil = .distantPast
             streamReadInProgress = false
             refreshSlots()
@@ -523,6 +599,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 self.liveSlots = slots
                 self.refreshSlots()
             }
+            self.recentContacts = snapshot?["contacts"] as? [[String: String]] ?? []
+            self.refreshContacts()
             if manual {
                 self.status.stringValue = connected ? "Club Log live activity refreshed." : "Club Log live activity unavailable."
             }
@@ -562,7 +640,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
                     slots[key] = {frequency: String(entry.colFreq), mode: label, radioMode};
                 }
             }
-            return {connected, slots};
+            const contacts = connected ? allListEntries.slice().reverse().map(entry => ({
+                band: String(entry.band), group: ['D', 'C', 'P'][entry.mc] ?? '',
+                call: String(entry.call), frequency: String(entry.colFreq), mode: String(entry.colMode)
+            })) : [];
+            return {connected, slots, contacts};
         })()
         """#
 
@@ -603,9 +685,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func updateRefreshCountdown() {
         let now = Date()
-        if now >= liveSlotsValidUntil, !liveSlots.isEmpty {
+        if now >= liveSlotsValidUntil, !liveSlots.isEmpty || !recentContacts.isEmpty {
             liveSlots = [:]
+            recentContacts = []
             refreshSlots()
+            refreshContacts()
         }
         if now >= nextLiveRefresh || streamCall != expedition { refreshLiveActivity() }
         if now >= nextClubRefresh, !key.stringValue.isEmpty { refreshClubLog() }
@@ -730,7 +814,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         save()
     }
 
-    func tune(_ mode: String) { run("tune", ["frequency": frequency.stringValue, "mode": mode]) }
+    func tune(_ mode: String) {
+        run("tune", ["frequency": frequency.stringValue, "mode": mode]) { _ in self.checkRadioConnection() }
+    }
 
     func readMemories() {
         run("read") { result in
