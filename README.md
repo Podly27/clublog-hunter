@@ -33,7 +33,7 @@ The build produces a locally signed app bundle.
 
 - Enter your callsign and a Club Log REST API token in **Settings**, then click **Save settings**. Create the token in Club Log under **Settings → API**. Hunter stores it in the macOS Keychain.
 - The expedition menu loads callsigns from Club Log with a QSO in the last seven days. Hunter restores the last selected expedition when it is available. The manually configured callsigns are available at startup before the first successful fetch.
-- **Overview** displays spots from HamQTH for the last 30 minutes. A yellow cell shows a recent spot. A green cell shows a worked slot from Club Log and takes priority. Club Log groups digital modes under **Data**. The footer shows when the app will refresh each source.
+- **Overview** displays the newest HamQTH spot for each band and mode. Spots expire after 10 minutes. A yellow cell shows a recent spot. A green cell shows a worked slot from Club Log and takes priority. Club Log groups digital modes under **Data**. The footer shows when the app will refresh each source.
 - Click a spotted or saved frequency to tune **VFO A**. Option-click a cell to edit or remove a saved frequency. **Livestream web** opens the selected expedition's Club Log page.
 
 ## CW memories

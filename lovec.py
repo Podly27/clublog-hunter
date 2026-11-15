@@ -108,7 +108,6 @@ def recent_spots(expedition):
         raise ValueError("HamQTH returned an unexpected response.")
     now = datetime.now(timezone.utc)
     spots = []
-    seen = set()
     for row in payload["spots"]:
         if row.get("dxcall", "").upper() != expedition:
             continue
@@ -128,10 +127,6 @@ def recent_spots(expedition):
         else:
             radio_mode = mode if mode in ("CW", "FT8") else ""
         mode = mode or "?"
-        identity = (frequency, mode)
-        if identity in seen:
-            continue
-        seen.add(identity)
         spots.append({
             "frequency": format(frequency, "f"), "mode": mode, "radioMode": radio_mode,
             "band": str(row.get("band", "")).upper(),

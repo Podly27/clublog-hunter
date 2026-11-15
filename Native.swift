@@ -147,6 +147,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var clubExpeditions: [String]?
     let lastExpeditionKey = "lastSelectedExpedition"
     var spots: [[String: Any]] = []
+    private let spotLifetime: TimeInterval = 10 * 60
     var lastSpotRequest = Date.distantPast
     var spotCall = ""
     let frequency = NSTextField(string: "14.074")
@@ -504,24 +505,31 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     func renderSpots() {
-        let cutoff = Date().timeIntervalSince1970 - 1800
-        spots = spots.filter { ($0["timestamp"] as? Double ?? 0) >= cutoff }
+        removeExpiredSpots(at: Date())
         refreshSlots()
+    }
+
+    private func removeExpiredSpots(at now: Date) {
+        let cutoff = now.timeIntervalSince1970 - spotLifetime
+        spots.removeAll { ($0["timestamp"] as? Double ?? 0) <= cutoff }
     }
 
     func tableSpot(_ band: Int, _ mode: String) -> [String: Any]? {
         guard spotCall == expedition else { return nil }
         let modes = ["C": ["CW"], "P": ["SSB"], "D": ["FT8", "DIGI"]]
-        let cutoff = Date().timeIntervalSince1970 - 1800
-        return spots.first {
+        let cutoff = Date().timeIntervalSince1970 - spotLifetime
+        return spots.filter {
             $0["band"] as? String == "\(band)M"
                 && (modes[mode]?.contains($0["mode"] as? String ?? "") ?? false)
-                && ($0["timestamp"] as? Double ?? 0) >= cutoff
+                && ($0["timestamp"] as? Double ?? 0) > cutoff
+        }.max {
+            ($0["timestamp"] as? Double ?? 0) < ($1["timestamp"] as? Double ?? 0)
         }
     }
 
     func tuneSpot(_ spot: [String: Any]) {
-        guard let timestamp = spot["timestamp"] as? Double, Date().timeIntervalSince1970 - timestamp <= 1800 else {
+        guard let timestamp = spot["timestamp"] as? Double,
+              Date().timeIntervalSince1970 - timestamp < spotLifetime else {
             renderSpots()
             return
         }
@@ -550,6 +558,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func updateRefreshCountdown() {
         let now = Date()
+        let previousSpotCount = spots.count
+        removeExpiredSpots(at: now)
+        if spots.count != previousSpotCount { refreshSlots() }
         if now >= nextSpotRefresh, !expedition.isEmpty { refreshSpots() }
         if now >= nextClubRefresh, !key.stringValue.isEmpty { refreshClubLog() }
         let club = key.stringValue.isEmpty ? "—" : "\(max(0, Int(ceil(nextClubRefresh.timeIntervalSince(now))))) s"
