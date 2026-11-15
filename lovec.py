@@ -17,7 +17,7 @@ DEFAULT_PORT = "/dev/cu.usbmodem12103"
 def callsign(value):
     value = value.strip().upper()
     if not re.fullmatch(r"[A-Z0-9]+(?:/[A-Z0-9]+)*", value) or not any(c.isdigit() for c in value):
-        raise ValueError("Zadej platnou radioamatérskou značku.")
+        raise ValueError("Enter a valid amateur radio callsign.")
     return value
 
 
@@ -28,7 +28,7 @@ def parse_mhz(value):
             return int(hz)
     except InvalidOperation:
         pass
-    raise ValueError("Zadej frekvenci v MHz, například 14.074.")
+    raise ValueError("Enter a frequency in MHz, for example 14.074.")
 
 
 def club_expeditions(token):
@@ -40,7 +40,7 @@ def club_expeditions(token):
         payload = json.load(response)
     rows = payload.get("expeditions", payload.get("data")) if isinstance(payload, dict) else payload
     if not isinstance(rows, list):
-        raise ValueError("Club Log vrátil neočekávaný seznam expedic.")
+        raise ValueError("Club Log returned an unexpected expedition list.")
     now = datetime.now(timezone.utc)
     cutoff = now - timedelta(days=7)
     result = set()
@@ -69,7 +69,7 @@ def club_expeditions(token):
         if cutoff <= stamp <= now:
             result.add(call)
     if rows and not parsed:
-        raise ValueError("Club Log vrátil expedice bez čitelného data posledního QSO.")
+        raise ValueError("Club Log returned no readable last-QSO dates.")
     return sorted(result)
 
 
@@ -90,7 +90,7 @@ def worked_slots(operator, expedition, api_key):
     if api_key.startswith("cl_"):
         result = result.get("slots") if isinstance(result, dict) else None
     if not isinstance(result, (dict, list)) or isinstance(result, list) and result:
-        raise ValueError("Club Log vrátil neočekávaná data.")
+        raise ValueError("Club Log returned unexpected data.")
     return {(int(band), mode) for band, counts in dict(result).items()
             if band.isdecimal() and isinstance(counts, dict)
             for mode, count in counts.items() if isinstance(count, int) and count > 0}
@@ -105,7 +105,7 @@ def recent_spots(expedition):
     with urlopen("https://www.hamqth.com/api/v2/spots?" + query, timeout=8) as response:
         payload = json.load(response)
     if not isinstance(payload, dict) or not isinstance(payload.get("spots"), list):
-        raise ValueError("HamQTH vrátil neočekávanou odpověď.")
+        raise ValueError("HamQTH returned an unexpected response.")
     now = datetime.now(timezone.utc)
     spots = []
     seen = set()
@@ -160,10 +160,10 @@ def club_log_error(error, key):
                 return f"{prefix} {detail}"
     if error.code == 403 and key.startswith("cl_"):
         if not isinstance(payload, dict):
-            return f"{prefix} Server nevrátil chybu API ve formátu JSON. Zkontroluj clublog.org/check.php."
-        return f"{prefix} Zkontroluj, zda Moje značka patří ke stejnému účtu Club Logu."
+            return f"{prefix} The server returned a non-JSON error. Check clublog.org/check.php."
+        return f"{prefix} Verify that My callsign belongs to the same Club Log account."
     if error.code == 401:
-        return f"{prefix} Zkontroluj, zda je vložený celý token."
+        return f"{prefix} Check that you pasted the entire token."
     return prefix
 
 
@@ -187,15 +187,15 @@ class Controller:
             temp = CONFIG.with_suffix(".tmp")
             temp.write_text(json.dumps(config))
             temp.replace(CONFIG)
-            return "Nastavení uloženo."
+            return "Settings saved."
         if action == "spots":
             return recent_spots(data["target"])
         if action in ("lookup", "expeditions"):
             key = data["key"].strip()
             if not key:
-                raise ValueError("V Nastavení zadej REST API token Club Logu (cl_…).")
+                raise ValueError("Enter a Club Log REST API token (cl_…) in Settings.")
             if key in self.rejected_keys:
-                raise ValueError("Club Log už tento klíč odmítl. Ověř typ klíče a přístup na clublog.org/check.php.")
+                raise ValueError("Club Log already rejected this token. Check the token type and access at clublog.org/check.php.")
             try:
                 if action == "expeditions":
                     return club_expeditions(key)
@@ -215,21 +215,21 @@ class Controller:
             return True
         if action == "disconnect":
             self.close()
-            return "Rádio odpojeno."
+            return "Radio disconnected."
         if action == "connect":
             if self.radio is not None:
-                raise ValueError("Nejdřív odpoj stávající spojení.")
+                raise ValueError("Disconnect the current connection first.")
             if data.get("simulate"):
                 self.radio = Simulator()
-                return "Simulace aktivní."
+                return "Simulation active."
             path = data["port"]
             if path == "/dev/cu.usbmodem12101" or path == "/dev/tty.usbmodem12101":
-                raise ValueError("Tento port používá WSJT-X. Vyber druhý port 12103.")
+                raise ValueError("This port is reserved for WSJT-X. Select the second port.")
             if path not in glob("/dev/cu.usb*"):
-                raise ValueError("Vyber připojený USB port ve formátu /dev/cu.usb…")
+                raise ValueError("Select a connected USB port beginning with /dev/cu.usb.")
             address, baud = int(data["address"], 16), int(data["baud"])
             if not 1 <= address <= 0xDF:
-                raise ValueError("Neplatná adresa CI-V.")
+                raise ValueError("Invalid CI-V address.")
             radio = Radio(Civ(path, baud, address))
             try:
                 hz = radio.frequency()
@@ -237,32 +237,32 @@ class Controller:
                 radio.close()
                 raise
             self.radio = radio
-            return f"Připojeno · {hz / 1e6:.6f} MHz"
+            return f"Connected · {hz / 1e6:.6f} MHz"
         if self.radio is None:
-            raise ValueError("Připoj rádio nebo spusť simulaci v Nastavení.")
+            raise ValueError("Connect the radio or start simulation in Settings.")
         if action == "vfo":
             return f"{self.radio.frequency() / 1e6:.6f}"
         if action == "tune":
             hz, mode = parse_mhz(data["frequency"]), data["mode"]
             if mode not in ("FT8", "CW", "USB", "LSB"):
-                raise ValueError("Neznámý režim.")
+                raise ValueError("Unknown operating mode.")
             self.radio.tune(hz, mode)
             return f"{hz / 1e6:.6f} MHz · {mode}"
         if action == "read":
             return [self.radio.read_memory(i) for i in range(1, 9)]
         if action == "stop_cw":
             self.radio.stop_cw()
-            return "Povel k zastavení CW potvrzen."
+            return "CW stop command acknowledged."
         if action in ("write", "send_memory"):
             index = data["index"]
             if type(index) is not int or not 1 <= index <= 8:
-                raise ValueError("Vyber paměť M1 až M8.")
+                raise ValueError("Select a memory from M1 to M8.")
             if action == "send_memory":
                 self.radio.send_memory(index)
-                return f"M{index}: povel k odeslání potvrzen."
+                return f"M{index}: transmit command acknowledged."
             self.radio.write_memory(index, data["value"].upper())
-            return f"M{index} zapsána a ověřena."
-        raise ValueError("Neznámá operace.")
+            return f"M{index} written and verified."
+        raise ValueError("Unknown operation.")
 
     def close(self):
         if self.radio is not None:

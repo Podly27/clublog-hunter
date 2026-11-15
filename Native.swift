@@ -32,7 +32,7 @@ private enum ClubLogKeychain {
 }
 
 final class Worker {
-    private let queue = DispatchQueue(label: "DX Lovec CAT")
+    private let queue = DispatchQueue(label: "ClubLog Hunter CAT")
     private var process: Process?
     private var input: FileHandle?
     private var output: FileHandle?
@@ -74,7 +74,7 @@ final class Worker {
                 }
             }
             let chunk = output!.availableData
-            guard !chunk.isEmpty else { return ["error": "Ovládání rádia se ukončilo. Zkus akci znovu."] }
+            guard !chunk.isEmpty else { return ["error": "The radio connection process stopped. Try again."] }
             buffer.append(chunk)
         }
     }
@@ -111,20 +111,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
     let worker = Worker()
     var window: NSWindow!
     let tabs = NSTabView()
-    let status = NSTextField(labelWithString: "Rádio odpojeno")
+    let status = NSTextField(labelWithString: "Radio disconnected")
     let radioDot = NSImageView()
-    let radioLabel = NSTextField(labelWithString: "Odpojeno")
+    let radioLabel = NSTextField(labelWithString: "Disconnected")
     var radioConnected = false
     var radioCheckInProgress = false
     var radioTimer: Timer?
-    let log = NSTextField(labelWithString: "Spojení zatím nejsou načtená")
+    let log = NSTextField(labelWithString: "Worked slots not loaded")
     let target = NSPopUpButton()
     var spotTimer: Timer?
-    let refreshLabel = NSTextField(labelWithString: "Club Log —  ·  Spoty —")
+    let refreshLabel = NSTextField(labelWithString: "Club Log —  ·  Spots —")
     var nextClubRefresh = Date.distantPast
     var nextSpotRefresh = Date.distantPast
     var expeditionRefreshInProgress = false
     var clubExpeditions: [String]?
+    let lastExpeditionKey = "lastSelectedExpedition"
     var spots: [[String: Any]] = []
     var lastSpotRequest = Date.distantPast
     var spotCall = ""
@@ -164,9 +165,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         footer.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
         window.contentView = viewWith(stack: layout, padding: 18, stretch: true)
         updateRadioIndicator()
-        addTab("Přehled", buildHunt())
+        addTab("Overview", buildHunt())
         addTab("CW", buildMemories())
-        addTab("Nastavení", buildSetup())
+        addTab("Settings", buildSetup())
         target.target = self
         target.action = #selector(changeExpedition)
         port.stringValue = "/dev/cu.usbmodem12103"
@@ -241,12 +242,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func buildHunt() -> NSStackView {
         let head = stack([
-            label("Expedice"), target, ActionButton("Načíst spojení") { self.refreshClubLog(manual: true) },
+            label("Expedition"), target, ActionButton("Refresh worked slots") { self.refreshClubLog(manual: true) },
             ActionButton("Livestream web") { self.openStream() },
-            ActionButton("Načíst spoty") { self.refreshSpots(manual: true) }
+            ActionButton("Refresh spots") { self.refreshSpots(manual: true) }
         ], vertical: false)
         let heading = stack([
-            label("Pásmo", width: 68), label("CW", width: 125),
+            label("Band", width: 68), label("CW", width: 125),
             label("Phone", width: 125), label("Data / FT8", width: 125)
         ], vertical: false)
         let table = stack([heading], spacing: 2)
@@ -278,38 +279,38 @@ final class Delegate: NSObject, NSApplicationDelegate {
             transmit.widthAnchor.constraint(equalToConstant: 54).isActive = true
             transmit.heightAnchor.constraint(equalToConstant: 24).isActive = true
             transmit.setBackground(NSColor(srgbRed: 0.69, green: 0.14, blue: 0.18, alpha: 1), textColor: .white)
-            transmit.toolTip = "Odvysílat M\(index)"
+            transmit.toolTip = "Transmit M\(index)"
             layout.addArrangedSubview(stack([label("M\(index)", width: 34), field,
-                ActionButton("Zapsat") { self.writeMemory(index) },
+                ActionButton("Write") { self.writeMemory(index) },
                 transmit], vertical: false))
         }
         layout.addArrangedSubview(stack([
-            ActionButton("Načíst z rádia") { self.readMemories() },
-            ActionButton("Zastavit CW") { self.run("stop_cw") },
-            ActionButton("Uložit sadu…") { self.saveMemories() },
-            ActionButton("Otevřít sadu…") { self.loadMemories() }
+            ActionButton("Read from radio") { self.readMemories() },
+            ActionButton("Stop CW") { self.run("stop_cw") },
+            ActionButton("Save set…") { self.saveMemories() },
+            ActionButton("Open set…") { self.loadMemories() }
         ], vertical: false))
-        layout.addArrangedSubview(label("TX používá text uložený v rádiu. Vyžaduje CW a Break-in."))
+        layout.addArrangedSubview(label("TX sends the text stored in the radio. CW and break-in are required."))
         return layout
     }
 
     func buildSetup() -> NSStackView {
         let layout = stack([])
         let entries: [(String, NSTextField)] = [
-            ("Moje značka", operatorCall), ("Sledované značky", targets),
-            ("Club Log API klíč", key), ("Port CI-V", port),
-            ("Rychlost", baud), ("Adresa CI-V (hex)", address)
+            ("My callsign", operatorCall), ("Watched callsigns", targets),
+            ("Club Log API token", key), ("CI-V port", port),
+            ("Baud rate", baud), ("CI-V address (hex)", address)
         ]
         for (title, field) in entries {
             field.widthAnchor.constraint(equalToConstant: 370).isActive = true
             layout.addArrangedSubview(stack([label(title, width: 170), field], vertical: false))
         }
-        layout.addArrangedSubview(label("Na rádiu nastav USB (B) Function na CI-V. Před laděním vypni Enable Tx ve WSJT-X."))
+        layout.addArrangedSubview(label("Set USB (B) Function to CI-V on the radio. Disable Enable Tx in WSJT-X before tuning."))
         layout.addArrangedSubview(stack([
-            ActionButton("Uložit nastavení") { self.save(includeToken: true) },
-            ActionButton("Připojit rádio") { self.connect(false) },
-            ActionButton("Simulace") { self.connect(true) },
-            ActionButton("Odpojit") {
+            ActionButton("Save settings") { self.save(includeToken: true) },
+            ActionButton("Connect radio") { self.connect(false) },
+            ActionButton("Simulation") { self.connect(true) },
+            ActionButton("Disconnect") {
                 self.run("disconnect") { _ in
                     self.simulated = false
                     self.radioConnected = false
@@ -323,14 +324,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func run(_ action: String, _ data: [String: Any] = [:], completion: ((Any?) -> Void)? = nil) {
         guard !busy else { return }
         busy = true
-        status.stringValue = "Pracuji…"
+        status.stringValue = "Working…"
         worker.request(action, data) { response in
             self.busy = false
             if let error = response["error"] as? String { self.status.stringValue = error; return }
             let result = response["result"]
-            let detail = result as? String ?? "Hotovo"
-            self.status.stringValue = self.simulated && !detail.hasPrefix("Simulace") && action != "disconnect"
-                ? "Simulace · \(detail)" : detail
+            let detail = result as? String ?? "Done"
+            self.status.stringValue = self.simulated && !detail.hasPrefix("Simulation") && action != "disconnect"
+                ? "Simulation · \(detail)" : detail
             completion?(result)
         }
     }
@@ -348,7 +349,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func updateRadioIndicator() {
         radioDot.contentTintColor = radioConnected ? .systemGreen : .systemRed
-        radioLabel.stringValue = radioConnected ? "Připojeno" : (simulated ? "Simulace" : "Odpojeno")
+        radioLabel.stringValue = radioConnected ? "Connected" : (simulated ? "Simulation" : "Disconnected")
     }
 
     func checkRadioConnection() {
@@ -359,7 +360,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             guard self.radioConnected, response["result"] as? Bool != true else { return }
             self.radioConnected = false
             self.updateRadioIndicator()
-            self.status.stringValue = "Rádio přestalo odpovídat."
+            self.status.stringValue = "The radio stopped responding."
         }
     }
 
@@ -383,7 +384,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
             .filter { !$0.isEmpty && seen.insert($0).inserted }
         target.removeAllItems()
         target.addItems(withTitles: clubExpeditions ?? names.sorted())
-        if let previous, target.itemTitles.contains(previous) { target.selectItem(withTitle: previous) }
+        let saved = UserDefaults.standard.string(forKey: lastExpeditionKey)
+        if let saved, target.itemTitles.contains(saved) {
+            target.selectItem(withTitle: saved)
+        } else if let previous, target.itemTitles.contains(previous) {
+            target.selectItem(withTitle: previous)
+        }
         refreshSlots()
     }
 
@@ -393,9 +399,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
     @objc func refreshSlots() {
         let matches = worked[lookupKey]
         if clubExpeditions?.isEmpty == true {
-            log.stringValue = "Club Log · žádná expedice s QSO za posledních 7 dní."
+            log.stringValue = "Club Log · No expeditions with a QSO in the past 7 days."
         } else {
-            log.stringValue = matches.map { "Club Log · \($0.count) hotových kombinací" } ?? "Spojení zatím nejsou načtená"
+            log.stringValue = matches.map { "Club Log · \($0.count) worked slots" } ?? "Worked slots not loaded"
         }
         for (row, band) in bands.enumerated() {
             for (column, mode) in modes.enumerated() {
@@ -420,6 +426,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func changeExpedition() {
+        if !expedition.isEmpty { UserDefaults.standard.set(expedition, forKey: lastExpeditionKey) }
         refreshSlots()
         refreshSpots()
         lookup(automatic: true)
@@ -436,13 +443,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard !call.isEmpty, !busy else { return }
         guard Date().timeIntervalSince(lastSpotRequest) >= 15 else {
             if manual {
-                status.stringValue = "HamQTH · další načtení je možné po 15 sekundách."
+                status.stringValue = "HamQTH · Wait 15 seconds between spot refreshes."
             }
             return
         }
         lastSpotRequest = Date()
         nextSpotRefresh = Date().addingTimeInterval(60)
-        if manual { status.stringValue = "HamQTH · načítám spoty pro \(call)…" }
+        if manual { status.stringValue = "HamQTH · Loading spots for \(call)…" }
         worker.request("spots", ["target": call]) { response in
             guard self.expedition == call else { return }
             if let error = response["error"] as? String {
@@ -453,7 +460,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             self.spots = response["result"] as? [[String: Any]] ?? []
             self.renderSpots()
             if manual {
-                self.status.stringValue = self.spots.isEmpty ? "Žádné čerstvé spoty." : "Spoty načteny."
+                self.status.stringValue = self.spots.isEmpty ? "No recent spots." : "Spots loaded."
             }
         }
     }
@@ -481,7 +488,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             return
         }
         guard let mode = spot["radioMode"] as? String, !mode.isEmpty else {
-            status.stringValue = "Spot nemá potvrzený režim CW, SSB ani FT8."
+            status.stringValue = "This spot does not specify CW, SSB, or FT8."
             return
         }
         guard let value = spot["frequency"] as? String else { return }
@@ -499,7 +506,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
     func saveToken(_ token: String) {
         let result = ClubLogKeychain.save(token)
         if result != errSecSuccess {
-            status.stringValue = "Token se nepodařilo uložit do Klíčenky (\(result))."
+            status.stringValue = "Could not save the token in Keychain (\(result))."
         }
     }
 
@@ -509,7 +516,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         if now >= nextClubRefresh, !key.stringValue.isEmpty { refreshClubLog() }
         let club = key.stringValue.isEmpty ? "—" : "\(max(0, Int(ceil(nextClubRefresh.timeIntervalSince(now))))) s"
         let spots = expedition.isEmpty ? "—" : "\(max(0, Int(ceil(nextSpotRefresh.timeIntervalSince(now))))) s"
-        refreshLabel.stringValue = "Club Log \(club)  ·  Spoty \(spots)"
+        refreshLabel.stringValue = "Club Log \(club)  ·  Spots \(spots)"
     }
 
     func refreshClubLog(manual: Bool = false) {
@@ -531,7 +538,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 self.refreshTargets()
                 self.refreshSpots()
             } else if let error = response["error"] as? String {
-                self.status.stringValue = "Expedice · " + error
+                self.status.stringValue = "Expedition · " + error
             }
             self.lookup(automatic: !manual)
         }
@@ -542,12 +549,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let token = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let operatorName = operatorCall.stringValue
         guard !token.isEmpty, !operatorName.isEmpty, !expedition.isEmpty else {
-            if !automatic { status.stringValue = "V Nastavení vyplň svoji značku a token Club Logu." }
+            if !automatic { status.stringValue = "Enter your callsign and Club Log token in Settings." }
             return
         }
         let current = lookupKey
         lookupInProgress = true
-        log.stringValue = "Načítám spojení z Club Logu…"
+        log.stringValue = "Loading worked slots from Club Log…"
         worker.request("lookup", ["operator": operatorName, "target": expedition, "key": token]) { response in
             self.lookupInProgress = false
             if let error = response["error"] as? String {
@@ -583,7 +590,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         }
         let alert = NSAlert()
         alert.messageText = "\(expedition) · \(band) m"
-        alert.informativeText = "Zadej frekvenci v MHz."
+        alert.informativeText = "Enter a frequency in MHz."
         let field = NSTextField(string: saved?["frequency"] ?? "")
         let sideband = NSPopUpButton()
         sideband.addItems(withTitles: ["USB", "LSB"])
@@ -592,9 +599,9 @@ final class Delegate: NSObject, NSApplicationDelegate {
         fields.frame.size = NSSize(width: 260, height: 32)
         field.widthAnchor.constraint(equalToConstant: 125).isActive = true
         alert.accessoryView = fields
-        alert.addButton(withTitle: "Uložit")
-        alert.addButton(withTitle: "Zrušit")
-        if saved != nil { alert.addButton(withTitle: "Smazat") }
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        if saved != nil { alert.addButton(withTitle: "Delete") }
         alert.window.initialFirstResponder = field
         let result = alert.runModal()
         if result == .alertThirdButtonReturn {
@@ -605,7 +612,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         guard result == .alertFirstButtonReturn else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let mhz = Double(value.replacingOccurrences(of: ",", with: ".")), (0.03...74.8).contains(mhz) else {
-            status.stringValue = "Zadej frekvenci v MHz, například 14.074."
+            status.stringValue = "Enter a frequency in MHz, for example 14.074."
             return
         }
         let radioMode = mode == "P" ? (sideband.titleOfSelectedItem ?? "USB") : (mode == "C" ? "CW" : "FT8")
@@ -620,16 +627,16 @@ final class Delegate: NSObject, NSApplicationDelegate {
         run("read") { result in
             guard let values = result as? [String], values.count == self.memories.count else { return }
             for (field, value) in zip(self.memories, values) { field.stringValue = value }
-            self.status.stringValue = self.simulated ? "Simulace · paměti M1–M8 načteny." : "Paměti M1–M8 načteny."
+            self.status.stringValue = self.simulated ? "Simulation · Memories M1–M8 loaded." : "Memories M1–M8 loaded."
         }
     }
 
     func writeMemory(_ index: Int) {
         guard !busy else { return }
         let alert = NSAlert()
-        alert.messageText = "Přepsat M\(index)?"
-        alert.addButton(withTitle: "Zapsat")
-        alert.addButton(withTitle: "Zrušit")
+        alert.messageText = "Overwrite M\(index)?"
+        alert.addButton(withTitle: "Write")
+        alert.addButton(withTitle: "Cancel")
         if alert.runModal() == .alertFirstButtonReturn {
             run("write", ["index": index, "value": memories[index - 1].stringValue])
         }
@@ -637,12 +644,12 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func saveMemories() {
         let panel = NSSavePanel()
-        panel.nameFieldStringValue = "CW-pameti.json"
+        panel.nameFieldStringValue = "CW-memories.json"
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
             let data = try JSONSerialization.data(withJSONObject: memories.map(\.stringValue), options: [.prettyPrinted])
             try data.write(to: url, options: .atomic)
-            status.stringValue = "Sada CW pamětí uložena."
+            status.stringValue = "CW memory set saved."
         } catch { status.stringValue = error.localizedDescription }
     }
 
@@ -652,11 +659,11 @@ final class Delegate: NSObject, NSApplicationDelegate {
         do {
             guard let values = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String],
                   values.count == 8, values.allSatisfy({ $0.count <= 70 }) else {
-                status.stringValue = "Sada musí obsahovat osm textů s nejvýše 70 znaky."
+                status.stringValue = "A set must contain eight messages of up to 70 characters each."
                 return
             }
             for (field, value) in zip(memories, values) { field.stringValue = value }
-            status.stringValue = "Sada načtena do editoru."
+            status.stringValue = "Memory set loaded into the editor."
         } catch { status.stringValue = error.localizedDescription }
     }
 }
@@ -668,15 +675,15 @@ app.setActivationPolicy(.regular)
 let menu = NSMenu()
 let appMenuItem = NSMenuItem()
 let appMenu = NSMenu()
-appMenu.addItem(withTitle: "Ukončit ClubLog Hunter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+appMenu.addItem(withTitle: "Quit ClubLog Hunter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 appMenuItem.submenu = appMenu
 menu.addItem(appMenuItem)
 let editItem = NSMenuItem()
-let editMenu = NSMenu(title: "Úpravy")
-editMenu.addItem(withTitle: "Vyjmout", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-editMenu.addItem(withTitle: "Kopírovat", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-editMenu.addItem(withTitle: "Vložit", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-editMenu.addItem(withTitle: "Vybrat vše", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
+let editMenu = NSMenu(title: "Edit")
+editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
 editItem.submenu = editMenu
 menu.addItem(editItem)
 app.mainMenu = menu

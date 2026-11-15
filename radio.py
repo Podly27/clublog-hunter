@@ -32,7 +32,7 @@ class Civ:
         packet = header + data + b"\xfd"
         while packet:
             if not select.select([], [self.fd], [], max(0, deadline - time.monotonic()))[1]:
-                raise TimeoutError("Sériový port nepřijímá data.")
+                raise TimeoutError("The serial port is not accepting data.")
             packet = packet[os.write(self.fd, packet):]
         while time.monotonic() < deadline:
             if b"\xfd" not in self.buffer:
@@ -40,7 +40,7 @@ class Civ:
                     break
                 block = os.read(self.fd, 4096)
                 if not block:
-                    raise OSError("Sériový port byl odpojen.")
+                    raise OSError("The serial port disconnected.")
                 self.buffer += block
                 continue
             frame, self.buffer = self.buffer.split(b"\xfd", 1)
@@ -49,13 +49,13 @@ class Civ:
                 continue
             body = frame[index + 4:]
             if body == b"\xfa":
-                raise ValueError(f"Rádio odmítlo povel {data.hex(' ').upper()}.")
+                raise ValueError(f"The radio rejected command {data.hex(' ').upper()}.")
             if response is None and body == b"\xfb":
                 return
             if response is not None and body.startswith(response):
                 return body[len(response):]
         self.buffer = b""
-        raise TimeoutError("Rádio neodpovědělo. Zkontroluj port, rychlost a adresu CI-V.")
+        raise TimeoutError("The radio did not respond. Check the port, baud rate, and CI-V address.")
 
 
 def bcd_frequency(hz):
@@ -64,24 +64,24 @@ def bcd_frequency(hz):
 
 def decode_frequency(raw):
     if len(raw) != 5:
-        raise ValueError("Neočekávaný formát frekvence z rádia.")
+        raise ValueError("The radio returned an unexpected frequency format.")
     return int(raw[::-1].hex())
 
 
 def memory_bytes(value):
     if len(value) > 70 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?,.@^*" for c in value):
-        raise ValueError("CW paměť má nejvýše 70 znaků. Povolené jsou A–Z, 0–9, mezera a /?,.@^*.")
+        raise ValueError("A CW memory can contain up to 70 characters. Use A–Z, 0–9, spaces, or /?,.@^*.")
     return value.encode("ascii") or b" "
 
 
 def cw_message(value):
     value = value.strip()
     if not value:
-        raise ValueError("Paměť CW je prázdná.")
+        raise ValueError("The CW memory is empty.")
     if "*" in value:
-        raise ValueError("Paměť obsahuje závodní číslo (*). Odešli ji přímo na rádiu.")
+        raise ValueError("This memory contains a contest number (*). Send it from the radio.")
     if len(value) > 30:
-        raise ValueError("CI-V odešle nejvýše 30 znaků. Delší paměť odešli přímo na rádiu.")
+        raise ValueError("CI-V can send up to 30 characters. Send longer messages from the radio.")
     return memory_bytes(value)
 
 
@@ -97,14 +97,13 @@ class Radio:
 
     def require_rx(self):
         if self.command(b"\x1c\x00", b"\x1c\x00") != b"\x00":
-            raise ValueError("Rádio vysílá nebo nevrátilo stav RX.")
+            raise ValueError("The radio is transmitting or did not report RX mode.")
 
     def tune(self, hz, mode):
         modes = {"LSB": (0, 0), "USB": (1, 0), "CW": (3, 0), "FT8": (1, 1)}
         code, data = modes[mode]
         self.require_rx()
-        self.command(b"\x07\x00")  # Enter VFO mode, including from memory mode.
-        self.command(b"\x07\x01")  # Select VFO A.
+        self.command(b"\x07\x00")  # Enter VFO mode and select VFO A on the IC-7300MK2.
         if mode == "FT8":
             self.command(b"\x1a\x05\x00\x85\x01")
         elif mode in ("LSB", "USB"):
@@ -113,7 +112,7 @@ class Radio:
         mode_command = bytes((0x26, 0, code, data, 1))
         self.command(mode_command)
         if self.frequency() != hz or self.command(b"\x26\x00", b"\x26\x00") != mode_command[2:]:
-            raise ValueError("Rádio po přeladění vrátilo jinou frekvenci nebo režim.")
+            raise ValueError("The radio reported a different frequency or mode after tuning.")
 
     def read_memory(self, index):
         command = bytes((0x1a, 2, index))
@@ -124,15 +123,15 @@ class Radio:
         self.require_rx()
         self.command(bytes((0x1a, 2, index)) + payload)
         if self.read_memory(index) != value.rstrip():
-            raise ValueError(f"Kontrola zápisu M{index} se neshoduje.")
+            raise ValueError(f"M{index} did not match when read back.")
 
     def send_memory(self, index):
         payload = cw_message(self.read_memory(index))
         mode = self.command(b"\x04", b"\x04")
         if mode[:1] not in (b"\x03", b"\x07"):
-            raise ValueError("Před odesláním přepni rádio na CW nebo CW-R.")
+            raise ValueError("Switch the radio to CW or CW-R before transmitting.")
         if self.command(b"\x16\x47", b"\x16\x47") not in (b"\x01", b"\x02"):
-            raise ValueError("Před odesláním zapni na rádiu BK-IN nebo F-BKIN.")
+            raise ValueError("Enable BK-IN or F-BKIN on the radio before transmitting.")
         self.require_rx()
         self.command(b"\x17" + payload)
 
@@ -165,7 +164,7 @@ class Simulator:
     def send_memory(self, index):
         cw_message(self.read_memory(index))
         if self.mode != "CW":
-            raise ValueError("Před odesláním přepni simulaci na CW.")
+            raise ValueError("Switch the simulator to CW before transmitting.")
 
     def stop_cw(self):
         pass
