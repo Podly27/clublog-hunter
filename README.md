@@ -4,6 +4,14 @@ ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with 
 
 ![ClubLog Hunter app icon](assets/icon.png)
 
+## Screenshots
+
+The Overview and CW tabs shown with sample data.
+
+| Overview | CW memories |
+| --- | --- |
+| ![Overview with recent spots and worked slots](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
+
 ## Build and launch
 
 You'll need macOS, the Xcode Command Line Tools, and Python 3 at `/usr/bin/python3`. The app uses Swift/AppKit and the Python standard library.
