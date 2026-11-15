@@ -83,6 +83,7 @@ final class Worker {
 
 final class ActionButton: NSButton {
     private let actionBlock: () -> Void
+    var rightClick: (() -> Void)?
     init(_ title: String, _ action: @escaping () -> Void) {
         actionBlock = action
         super.init(frame: .zero)
@@ -102,6 +103,14 @@ final class ActionButton: NSButton {
             .font: font ?? NSFont.systemFont(ofSize: NSFont.systemFontSize),
             .foregroundColor: textColor
         ])
+    }
+
+    override func rightMouseDown(with event: NSEvent) {
+        if let rightClick {
+            rightClick()
+        } else {
+            super.rightMouseDown(with: event)
+        }
     }
 
     required init?(coder: NSCoder) { nil }
@@ -131,8 +140,16 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
 
     let worker = Worker()
     var window: NSWindow!
-    let tabs = NSTabView()
+    private var settingsWindow: NSWindow?
     let status = NSTextField(labelWithString: "Radio disconnected")
+    private let settingsStatus = NSTextField(labelWithString: "")
+    private var statusMessage: String {
+        get { status.stringValue }
+        set {
+            status.stringValue = newValue
+            settingsStatus.stringValue = newValue
+        }
+    }
     let radioDot = NSImageView()
     let radioLabel = NSTextField(labelWithString: "Disconnected")
     var radioConnected = false
@@ -171,18 +188,19 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     var slots: [String: [String: String]] = [:]
     var worked: [String: Set<String>] = [:]
     var rows: [[ActionButton]] = []
-    var memories: [NSTextField] = []
+    private let cwButtonHeight: CGFloat = 44
+    private let cwCharacters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?.-,:'()=+\"@^"
     var lookupInProgress = false
     var busy = false
     var simulated = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.appearance = selectedAppearance.nativeAppearance
-        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 930, height: 690),
+        window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 930, height: 760),
                           styleMask: [.titled, .closable, .miniaturizable, .resizable],
                           backing: .buffered, defer: false)
         window.title = "ClubLog Hunter · IC-7300MK2"
-        window.minSize = NSSize(width: 880, height: 650)
+        window.contentMinSize = NSSize(width: 880, height: 740)
         window.center()
         let spacer = NSView()
         status.setContentCompressionResistancePriority(.defaultLow, for: .horizontal)
@@ -192,13 +210,14 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         refreshLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 11, weight: .regular)
         refreshLabel.setContentCompressionResistancePriority(.required, for: .horizontal)
         let footer = stack([status, spacer, refreshLabel, radioDot, radioLabel], vertical: false)
-        let layout = stack([tabs, footer])
+        let content = buildHunt()
+        let verticalSpacer = NSView()
+        verticalSpacer.setContentHuggingPriority(.defaultLow, for: .vertical)
+        let layout = stack([content, verticalSpacer, footer])
+        content.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
         footer.widthAnchor.constraint(equalTo: layout.widthAnchor).isActive = true
         window.contentView = viewWith(stack: layout, padding: 18, stretch: true)
         updateRadioIndicator()
-        addTab("Overview", buildHunt())
-        addTab("CW", buildMemories())
-        addTab("Settings", buildSetup())
         target.target = self
         target.action = #selector(changeExpedition)
         port.stringValue = "/dev/cu.usbmodem12103"
@@ -255,16 +274,6 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         return view
     }
 
-    func addTab(_ name: String, _ content: NSStackView) {
-        let item = NSTabViewItem(identifier: name)
-        item.label = name
-        item.view = viewWith(stack: content, padding: 16)
-        tabs.addTabViewItem(item)
-        if tabs.numberOfTabViewItems == 1, let parent = tabs.superview {
-            tabs.widthAnchor.constraint(equalTo: parent.widthAnchor).isActive = true
-        }
-    }
-
     func label(_ text: String, width: CGFloat? = nil, alignment: NSTextAlignment = .left) -> NSTextField {
         let field = NSTextField(labelWithString: text)
         field.alignment = alignment
@@ -299,7 +308,9 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         overview.alignment = .centerX
         let columns = stack([overview, buildContacts()], vertical: false, spacing: 24)
         columns.alignment = .top
-        let layout = stack([head, columns], spacing: 18)
+        let layout = stack([head, columns, buildCWMessages()], spacing: 12)
+        layout.setCustomSpacing(2 * cwButtonHeight, after: head)
+        layout.setCustomSpacing(2 * cwButtonHeight, after: columns)
         layout.alignment = .centerX
         return layout
     }
@@ -361,33 +372,86 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         refreshContacts()
     }
 
-    func buildMemories() -> NSStackView {
-        let layout = stack([])
-        layout.alignment = .centerX
-        for index in 1...8 {
-            let field = NSTextField()
-            field.widthAnchor.constraint(equalToConstant: 420).isActive = true
-            memories.append(field)
-            let transmit = ActionButton("TX") { self.run("send_memory", ["index": index]) }
-            transmit.widthAnchor.constraint(equalToConstant: 54).isActive = true
-            transmit.heightAnchor.constraint(equalToConstant: 24).isActive = true
-            transmit.setBackground(NSColor(srgbRed: 0.69, green: 0.14, blue: 0.18, alpha: 1), textColor: .white)
-            transmit.toolTip = "Transmit M\(index)"
-            layout.addArrangedSubview(stack([label("M\(index)", width: 34), field,
-                ActionButton("Write") { self.writeMemory(index) },
-                transmit], vertical: false))
+    private func buildCWMessages() -> NSStackView {
+        let buttons = (1...5).map { index in
+            let key = "cwMessage\(index)"
+            let button = ActionButton("") { [weak self] in
+                guard let self else { return }
+                guard let message = UserDefaults.standard.string(forKey: key), !message.isEmpty else {
+                    statusMessage = "Right-click CW \(index) to set its message."
+                    return
+                }
+                run("send_cw", ["value": message])
+            }
+            button.controlSize = .large
+            button.font = .systemFont(ofSize: 15, weight: .medium)
+            button.widthAnchor.constraint(equalToConstant: 144).isActive = true
+            button.heightAnchor.constraint(equalToConstant: cwButtonHeight).isActive = true
+            button.cell?.lineBreakMode = .byTruncatingTail
+            updateCWButton(button, index: index, message: UserDefaults.standard.string(forKey: key) ?? "")
+            button.rightClick = { [weak self, weak button] in
+                guard let self, let button else { return }
+                editCWMessage(button, index: index, key: key)
+            }
+            return button
         }
-        layout.addArrangedSubview(stack([
-            ActionButton("Read from radio") { self.readMemories() },
-            ActionButton("Stop CW") { self.run("stop_cw") },
-            ActionButton("Save set…") { self.saveMemories() },
-            ActionButton("Open set…") { self.loadMemories() }
-        ], vertical: false))
-        layout.addArrangedSubview(label("TX sends the text stored in the radio. CW and break-in are required."))
+        let stop = ActionButton("Stop CW") { [weak self] in self?.run("stop_cw") }
+        stop.controlSize = .large
+        stop.font = .systemFont(ofSize: 15, weight: .medium)
+        stop.widthAnchor.constraint(equalToConstant: 296).isActive = true
+        stop.heightAnchor.constraint(equalToConstant: cwButtonHeight).isActive = true
+        let layout = stack([stack(buttons, vertical: false), stop])
+        layout.alignment = .centerX
         return layout
     }
 
-    func buildSetup() -> NSStackView {
+    private func updateCWButton(_ button: ActionButton, index: Int, message: String) {
+        button.title = message.isEmpty ? "CW \(index)" : message
+        button.toolTip = message.isEmpty ? "Right-click to set CW \(index)" : "\(message) · Right-click to edit"
+    }
+
+    private func editCWMessage(_ button: ActionButton, index: Int, key: String) {
+        let field = NSTextField(string: UserDefaults.standard.string(forKey: key) ?? "")
+        field.frame = NSRect(x: 0, y: 0, width: 310, height: 24)
+        let alert = NSAlert()
+        alert.messageText = "Edit CW \(index)"
+        alert.informativeText = "Enter up to 30 characters. Leave blank to clear the message."
+        alert.accessoryView = field
+        alert.addButton(withTitle: "Save")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = field
+        while true {
+            guard alert.runModal() == .alertFirstButtonReturn else { return }
+            let message = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).uppercased()
+            guard message.count <= 30, message.allSatisfy({ cwCharacters.contains($0) }) else {
+                alert.informativeText = "Use up to 30 characters: A–Z, 0–9, spaces, or /?.-,:'()=+\"@^."
+                continue
+            }
+            UserDefaults.standard.set(message, forKey: key)
+            updateCWButton(button, index: index, message: message)
+            return
+        }
+    }
+
+    @objc func showSettings() {
+        if settingsWindow == nil {
+            let content = buildSetup()
+            let padding: CGFloat = 18
+            let size = content.fittingSize
+            let panel = NSWindow(
+                contentRect: NSRect(x: 0, y: 0, width: size.width + 2 * padding, height: size.height + 2 * padding),
+                styleMask: [.titled, .closable], backing: .buffered, defer: false
+            )
+            panel.title = "Settings"
+            panel.isReleasedWhenClosed = false
+            panel.contentView = viewWith(stack: content, padding: padding)
+            panel.center()
+            settingsWindow = panel
+        }
+        settingsWindow?.makeKeyAndOrderFront(nil)
+    }
+
+    private func buildSetup() -> NSStackView {
         let layout = stack([])
         let appearance = NSPopUpButton()
         appearance.addItems(withTitles: Appearance.allCases.map(\.rawValue))
@@ -419,6 +483,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 }
             }
         ], vertical: false))
+        settingsStatus.stringValue = statusMessage
+        settingsStatus.widthAnchor.constraint(equalToConstant: 548).isActive = true
+        settingsStatus.lineBreakMode = .byTruncatingTail
+        layout.addArrangedSubview(settingsStatus)
         return layout
     }
 
@@ -431,13 +499,13 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     func run(_ action: String, _ data: [String: Any] = [:], completion: ((Any?) -> Void)? = nil) {
         guard !busy else { return }
         busy = true
-        status.stringValue = "Working…"
+        statusMessage = "Working…"
         worker.request(action, data) { response in
             self.busy = false
-            if let error = response["error"] as? String { self.status.stringValue = error; return }
+            if let error = response["error"] as? String { self.statusMessage = error; return }
             let result = response["result"]
             let detail = result as? String ?? "Done"
-            self.status.stringValue = self.simulated && !detail.hasPrefix("Simulation") && action != "disconnect"
+            self.statusMessage = self.simulated && !detail.hasPrefix("Simulation") && action != "disconnect"
                 ? "Simulation · \(detail)" : detail
             completion?(result)
         }
@@ -451,7 +519,6 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             self.radioConnected = !simulate
             self.updateRadioIndicator()
             self.checkRadioConnection()
-            self.readMemories()
         }
     }
 
@@ -475,7 +542,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             self.simulated = false
             self.updateTunedSlot(hz: nil, mode: nil)
             self.updateRadioIndicator()
-            self.status.stringValue = "The radio stopped responding."
+            self.statusMessage = "The radio stopped responding."
         }
     }
 
@@ -602,7 +669,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             self.recentContacts = snapshot?["contacts"] as? [[String: String]] ?? []
             self.refreshContacts()
             if manual {
-                self.status.stringValue = connected ? "Club Log live activity refreshed." : "Club Log live activity unavailable."
+                self.statusMessage = connected ? "Club Log live activity refreshed." : "Club Log live activity unavailable."
             }
         }
     }
@@ -655,11 +722,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
 
     func tuneLiveSlot(_ spot: [String: String]) {
         guard let value = spot["frequency"] else {
-            status.stringValue = "Club Log reports activity without a frequency."
+            statusMessage = "Club Log reports activity without a frequency."
             return
         }
         guard let mode = spot["radioMode"], !mode.isEmpty else {
-            status.stringValue = "This mode is unavailable for automatic tuning."
+            statusMessage = "This mode is unavailable for automatic tuning."
             return
         }
         frequency.stringValue = value
@@ -679,7 +746,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     func saveToken(_ token: String) {
         let result = ClubLogKeychain.save(token)
         if result != errSecSuccess {
-            status.stringValue = "Could not save the token in Keychain (\(result))."
+            statusMessage = "Could not save the token in Keychain (\(result))."
         }
     }
 
@@ -717,7 +784,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 self.refreshTargets()
                 self.refreshLiveActivity()
             } else if let error = response["error"] as? String {
-                self.status.stringValue = "Expedition · " + error
+                self.statusMessage = "Expedition · " + error
             }
             self.lookup(automatic: !manual)
         }
@@ -728,7 +795,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let token = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         let operatorName = operatorCall.stringValue
         guard !token.isEmpty, !operatorName.isEmpty, !expedition.isEmpty else {
-            if !automatic { status.stringValue = "Enter your callsign and Club Log token in Settings." }
+            if !automatic { statusMessage = "Enter your callsign and Club Log token in Settings." }
             return
         }
         let current = lookupKey
@@ -805,7 +872,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         guard result == .alertFirstButtonReturn else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         guard let mhz = Double(value.replacingOccurrences(of: ",", with: ".")), (0.03...74.8).contains(mhz) else {
-            status.stringValue = "Enter a frequency in MHz, for example 14.074."
+            statusMessage = "Enter a frequency in MHz, for example 14.074."
             return
         }
         let radioMode = mode == "P" ? (sideband.titleOfSelectedItem ?? "USB") : (mode == "C" ? "CW" : "FT8")
@@ -818,49 +885,6 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         run("tune", ["frequency": frequency.stringValue, "mode": mode]) { _ in self.checkRadioConnection() }
     }
 
-    func readMemories() {
-        run("read") { result in
-            guard let values = result as? [String], values.count == self.memories.count else { return }
-            for (field, value) in zip(self.memories, values) { field.stringValue = value }
-            self.status.stringValue = self.simulated ? "Simulation · Memories M1–M8 loaded." : "Memories M1–M8 loaded."
-        }
-    }
-
-    func writeMemory(_ index: Int) {
-        guard !busy else { return }
-        let alert = NSAlert()
-        alert.messageText = "Overwrite M\(index)?"
-        alert.addButton(withTitle: "Write")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            run("write", ["index": index, "value": memories[index - 1].stringValue])
-        }
-    }
-
-    func saveMemories() {
-        let panel = NSSavePanel()
-        panel.nameFieldStringValue = "CW-memories.json"
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            let data = try JSONSerialization.data(withJSONObject: memories.map(\.stringValue), options: [.prettyPrinted])
-            try data.write(to: url, options: .atomic)
-            status.stringValue = "CW memory set saved."
-        } catch { status.stringValue = error.localizedDescription }
-    }
-
-    func loadMemories() {
-        let panel = NSOpenPanel()
-        guard panel.runModal() == .OK, let url = panel.url else { return }
-        do {
-            guard let values = try JSONSerialization.jsonObject(with: Data(contentsOf: url)) as? [String],
-                  values.count == 8, values.allSatisfy({ $0.count <= 70 }) else {
-                status.stringValue = "A set must contain eight messages of up to 70 characters each."
-                return
-            }
-            for (field, value) in zip(memories, values) { field.stringValue = value }
-            status.stringValue = "Memory set loaded into the editor."
-        } catch { status.stringValue = error.localizedDescription }
-    }
 }
 
 let app = NSApplication.shared
@@ -869,17 +893,12 @@ app.delegate = delegate
 app.setActivationPolicy(.regular)
 let menu = NSMenu()
 let appMenuItem = NSMenuItem()
-let appMenu = NSMenu()
+let appMenu = NSMenu(title: "ClubLog Hunter")
+let settings = appMenu.addItem(withTitle: "Settings…", action: #selector(Delegate.showSettings), keyEquivalent: ",")
+settings.target = delegate
+appMenu.addItem(.separator())
 appMenu.addItem(withTitle: "Quit ClubLog Hunter", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 appMenuItem.submenu = appMenu
 menu.addItem(appMenuItem)
-let editItem = NSMenuItem()
-let editMenu = NSMenu(title: "Edit")
-editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
-editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
-editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
-editMenu.addItem(withTitle: "Select All", action: #selector(NSText.selectAll(_:)), keyEquivalent: "a")
-editItem.submenu = editMenu
-menu.addItem(editItem)
 app.mainMenu = menu
 app.run()

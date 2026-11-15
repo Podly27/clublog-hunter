@@ -208,20 +208,12 @@ class Controller:
                 raise ValueError("Unknown operating mode.")
             self.radio.tune(hz, mode)
             return f"{hz / 1e6:.6f} MHz · {mode}"
-        if action == "read":
-            return [self.radio.read_memory(i) for i in range(1, 9)]
         if action == "stop_cw":
             self.radio.stop_cw()
             return "CW stop command acknowledged."
-        if action in ("write", "send_memory"):
-            index = data["index"]
-            if type(index) is not int or not 1 <= index <= 8:
-                raise ValueError("Select a memory from M1 to M8.")
-            if action == "send_memory":
-                self.radio.send_memory(index)
-                return f"M{index}: transmit command acknowledged."
-            self.radio.write_memory(index, data["value"].upper())
-            return f"M{index} written and verified."
+        if action == "send_cw":
+            self.radio.send_cw(data["value"])
+            return "CW transmit command acknowledged."
         raise ValueError("Unknown operation.")
 
     def close(self):

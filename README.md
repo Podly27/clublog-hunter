@@ -6,11 +6,13 @@ ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with 
 
 ## Screenshots
 
-ClubLog Hunter 0.3.5 in simulation with sample data. The Overview shows the **Last contacts** panel filtered to **12 m CW**.
+Hunter in simulation with sample data. The main window shows worked slots, recent **12 m CW** contacts, and five CW message buttons with **Stop CW** below them.
 
-| Overview | CW memories |
-| --- | --- |
-| ![Overview with live frequencies, worked slots, and recent 12 m CW contacts](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
+![Hunter overview with recent contacts and CW controls](assets/overview.png)
+
+Open **ClubLog Hunter → Settings…** from the macOS menu bar to configure the radio, Club Log, and appearance.
+
+![Hunter Settings window in simulation](assets/settings.png)
 
 ## Build and launch
 
@@ -25,7 +27,7 @@ The build produces a locally signed app bundle.
 
 ## Set up the radio
 
-1. In **Settings**, select the radio's serial device, baud rate and CI‑V address. The factory address for the IC‑7300MK2 is `B6`. The serial device name depends on the Mac and USB connection.
+1. Open **ClubLog Hunter → Settings…** (⌘,) and select the radio's serial device, baud rate and CI‑V address. The factory address for the IC‑7300MK2 is `B6`. The serial device name depends on the Mac and USB connection.
 2. If WSJT‑X already uses the first virtual USB port, configure **USB (B) Function → CI‑V** on the radio and select the second port for Hunter. Disable **Enable Tx** in WSJT‑X before retuning from Hunter.
 3. Click **Connect radio**. Hunter reconnects on launch using the saved settings. The indicator in the bottom right shows the connection state. **Simulation** lets you try the controls without hardware.
 
@@ -39,11 +41,9 @@ The build produces a locally signed app bundle.
 - Click a live frequency to tune **VFO A**. Click **QRV** to enter a frequency when the livestream omits it. While that slot is active, the saved frequency appears in the cell and can be clicked to tune. Hover over the cell to see that the frequency was entered manually. Option-click to edit or remove the saved frequency.
 - In **Settings → Appearance**, select **Light**, **Dark**, or **System** to follow the macOS setting. Hunter remembers your choice.
 
-## CW memories
+## CW messages
 
-Hunter loads M1–M8 after connecting. **Write** writes a memory and verifies it by reading it back. You can also save and reopen sets as JSON.
-
-**TX** sends the text stored in the selected radio memory. It requires CW or CW‑R and Break-in. The CI‑V text command supports up to 30 characters. For longer messages or memories containing a contest-number placeholder `*`, send directly from the radio. **Stop CW** requests a stop.
+Right-click one of the five CW buttons below the tables in **Overview** to edit its message. Hunter stores the messages locally. Left-click a button to send its text directly via CI-V, up to 30 characters. Sending a message leaves the radio’s M1–M8 memories unchanged. The radio must be in CW or CW-R with Break-in enabled. Click **Stop CW** below the message buttons to stop transmission.
 
 ## References
 

@@ -68,21 +68,15 @@ def decode_frequency(raw):
     return int(raw[::-1].hex())
 
 
-def memory_bytes(value):
-    if len(value) > 70 or any(c not in "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?,.@^*" for c in value):
-        raise ValueError("A CW memory can contain up to 70 characters. Use A–Z, 0–9, spaces, or /?,.@^*.")
-    return value.encode("ascii") or b" "
-
-
 def cw_message(value):
-    value = value.strip()
+    value = value.strip().upper()
     if not value:
-        raise ValueError("The CW memory is empty.")
-    if "*" in value:
-        raise ValueError("This memory contains a contest number (*). Send it from the radio.")
+        raise ValueError("Enter a CW message.")
     if len(value) > 30:
-        raise ValueError("CI-V can send up to 30 characters. Send longer messages from the radio.")
-    return memory_bytes(value)
+        raise ValueError("CI-V can send up to 30 characters per CW message.")
+    if any(c not in """ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 /?.-,:'()=+"@^""" for c in value):
+        raise ValueError("The CW message contains a character unsupported by CI-V.")
+    return value.encode("ascii")
 
 
 class Radio:
@@ -127,19 +121,8 @@ class Radio:
         if self.frequency() != hz or self.command(b"\x26\x00", b"\x26\x00") != mode_command[2:]:
             raise ValueError("The radio reported a different frequency or mode after tuning.")
 
-    def read_memory(self, index):
-        command = bytes((0x1a, 2, index))
-        return self.command(command, command).decode("ascii").rstrip(" \x00")
-
-    def write_memory(self, index, value):
-        payload = memory_bytes(value)
-        self.require_rx()
-        self.command(bytes((0x1a, 2, index)) + payload)
-        if self.read_memory(index) != value.rstrip():
-            raise ValueError(f"M{index} did not match when read back.")
-
-    def send_memory(self, index):
-        payload = cw_message(self.read_memory(index))
+    def send_cw(self, value):
+        payload = cw_message(value)
         mode = self.command(b"\x04", b"\x04")
         if mode[:1] not in (b"\x03", b"\x07"):
             raise ValueError("Switch the radio to CW or CW-R before transmitting.")
@@ -159,7 +142,6 @@ class Simulator:
     def __init__(self):
         self.hz = 14074000
         self.mode = "FT8"
-        self.memories = ["CQ CQ DE TEST", "UR 5NN * BK", "CFM TU"] + [""] * 5
 
     def frequency(self):
         return self.hz
@@ -170,15 +152,8 @@ class Simulator:
     def mode_group(self):
         return {"CW": "C", "FT8": "D", "USB": "P", "LSB": "P"}[self.mode]
 
-    def read_memory(self, index):
-        return self.memories[index - 1]
-
-    def write_memory(self, index, value):
-        memory_bytes(value)
-        self.memories[index - 1] = value.rstrip()
-
-    def send_memory(self, index):
-        cw_message(self.read_memory(index))
+    def send_cw(self, value):
+        cw_message(value)
         if self.mode != "CW":
             raise ValueError("Switch the simulator to CW before transmitting.")
 
