@@ -1,6 +1,6 @@
 # ClubLog Hunter
 
-ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with an Icom IC‑7300MK2. It puts recent spots and worked band/mode combinations in one table. Click a supported frequency to tune the radio via CI‑V.
+ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with an Icom IC‑7300MK2. It puts Club Log Livestream frequencies and your worked band/mode combinations in one table. Click a supported frequency to tune the radio via CI‑V.
 
 ![ClubLog Hunter app icon](assets/icon.png)
 
@@ -10,11 +10,11 @@ The Overview and CW tabs shown with sample data.
 
 | Overview | CW memories |
 | --- | --- |
-| ![Overview with recent spots and worked slots](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
+| ![Overview with frequencies and worked slots](assets/overview.png) | ![CW tab with eight radio memories](assets/cw.png) |
 
 ## Build and launch
 
-You'll need macOS, the Xcode Command Line Tools, and Python 3 at `/usr/bin/python3`. The app uses Swift/AppKit and the Python standard library.
+You'll need macOS, the Xcode Command Line Tools, and Python 3 at `/usr/bin/python3`. The app uses Swift, AppKit, WebKit, and the Python standard library.
 
 ```sh
 ./build.sh
@@ -33,8 +33,10 @@ The build produces a locally signed app bundle.
 
 - Enter your callsign and a Club Log REST API token in **Settings**, then click **Save settings**. Create the token in Club Log under **Settings → API**. Hunter stores it in the macOS Keychain.
 - The expedition menu loads callsigns from Club Log with a QSO in the last seven days. Hunter restores the last selected expedition when it is available. The manually configured callsigns are available at startup before the first successful fetch.
-- **Overview** displays the newest HamQTH spot for each band and mode. Spots expire after 10 minutes. A yellow cell shows a recent spot. A green cell shows a worked slot from Club Log and takes priority. Club Log groups digital modes under **Data**. The footer shows when the app will refresh each source.
-- Click a spotted or saved frequency to tune **VFO A**. Option-click a cell to edit or remove a saved frequency. **Livestream web** opens the selected expedition's Club Log page.
+- **Overview** reads active band and mode combinations and their latest reported frequencies from the public Club Log Livestream. The app checks the page every five seconds. **Refresh live activity** checks immediately, and **Livestream web** opens the same page in your browser.
+- Yellow cells show live activity with a reported frequency. Green cells show your worked slots and take precedence over yellow. Live frequencies disappear when the slot goes inactive or live data becomes unavailable. The livestream's recent contacts must include a frequency for the app to display it.
+- Click a live or saved frequency to tune **VFO A**. Option-click a cell to edit or remove a saved frequency.
+- In **Settings → Appearance**, select **Light**, **Dark**, or **System** to follow the macOS setting. Hunter remembers your choice.
 
 ## CW memories
 
@@ -46,6 +48,5 @@ Hunter loads M1–M8 after connecting. **Write** writes a memory and verifies it
 
 - [Icom IC‑7300MK2 CI‑V reference](https://icomuk.co.uk/files/icom/PDF/productAdditionalFile/IC-7300MK2_ENG_CI-V_0.pdf)
 - [Club Log API reference](https://clublog.org/api/docs/index.php)
-- [HamQTH developer documentation](https://www.hamqth.com/developers)
 
 ClubLog Hunter is an independent project.

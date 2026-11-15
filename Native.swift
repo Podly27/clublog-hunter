@@ -1,5 +1,6 @@
 import AppKit
 import Security
+import WebKit
 
 private enum ClubLogKeychain {
     static let query: [String: Any] = [
@@ -139,17 +140,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
     var radioTimer: Timer?
     let log = NSTextField(labelWithString: "Worked slots not loaded")
     let target = NSPopUpButton()
-    var spotTimer: Timer?
-    let refreshLabel = NSTextField(labelWithString: "Club Log —  ·  Spots —")
+    var refreshTimer: Timer?
+    let refreshLabel = NSTextField(labelWithString: "Club Log —  ·  Live —")
     var nextClubRefresh = Date.distantPast
-    var nextSpotRefresh = Date.distantPast
+    var nextLiveRefresh = Date.distantPast
     var expeditionRefreshInProgress = false
     var clubExpeditions: [String]?
     let lastExpeditionKey = "lastSelectedExpedition"
-    var spots: [[String: Any]] = []
-    private let spotLifetime: TimeInterval = 10 * 60
-    var lastSpotRequest = Date.distantPast
-    var spotCall = ""
+    private var livestream: WKWebView?
+    private var streamCall = ""
+    private var liveSlots: [String: [String: String]] = [:]
+    private var liveSlotsValidUntil = Date.distantPast
+    private var streamReadInProgress = false
+    private var retryStreamAfter = Date.distantPast
     let frequency = NSTextField(string: "14.074")
     let operatorCall = NSTextField()
     let targets = NSTextField(string: "C8K")
@@ -206,13 +209,13 @@ final class Delegate: NSObject, NSApplicationDelegate {
             self.slots = config["frequencies"] as? [String: [String: String]] ?? [:]
             self.key.stringValue = ClubLogKeychain.read() ?? ""
             self.refreshTargets()
-            self.refreshSpots()
+            self.refreshLiveActivity()
             self.connect(false)
             self.refreshClubLog()
             self.radioTimer = Timer.scheduledTimer(withTimeInterval: 5, repeats: true) { [weak self] _ in
                 self?.checkRadioConnection()
             }
-            self.spotTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
+            self.refreshTimer = Timer.scheduledTimer(withTimeInterval: 1, repeats: true) { [weak self] _ in
                 self?.updateRefreshCountdown()
             }
         }
@@ -267,7 +270,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let head = stack([
             label("Expedition"), target, ActionButton("Refresh worked slots") { self.refreshClubLog(manual: true) },
             ActionButton("Livestream web") { self.openStream() },
-            ActionButton("Refresh spots") { self.refreshSpots(manual: true) }
+            ActionButton("Refresh live activity") { self.refreshLiveActivity(manual: true) }
         ], vertical: false)
         let heading = stack([
             label("Band", width: 68, alignment: .center),
@@ -409,7 +412,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
         run("save", data) { _ in
             if includeToken { self.saveToken(token) }
             self.refreshTargets()
-            self.refreshSpots()
+            self.refreshLiveActivity()
             if includeToken { self.refreshClubLog() }
         }
     }
@@ -446,17 +449,16 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 let hit = matches?.contains("\(band):\(mode)") == true
                 let saved = slots["\(expedition):\(band):\(mode)"]?["frequency"]
                 let button = rows[row][column]
-                let spot = tableSpot(band, mode)
-                let frequency = spot?["frequency"] as? String
+                let spot = liveSlot(band, mode)
+                let frequency = spot?["frequency"]
                 let spotTitle = frequency.flatMap(Double.init).map { String(format: "%.3f", $0) }
                 button.title = spotTitle ?? saved ?? (hit ? "" : "—")
                 let workedColor = NSColor(srgbRed: 0.55, green: 0.83, blue: 0.61, alpha: 1)
                 let qrvColor = NSColor(srgbRed: 1, green: 0.84, blue: 0.39, alpha: 1)
                 let background = hit ? workedColor : (spot != nil ? qrvColor : nil)
                 button.setBackground(background, textColor: background == nil ? .labelColor : .black)
-                if let frequency, let utc = spot?["utc"] as? String {
-                    let reportedMode = spot?["mode"] as? String ?? ""
-                    button.toolTip = "HamQTH · \(frequency) MHz · \(reportedMode) · \(utc) UTC"
+                if let frequency, let reportedMode = spot?["mode"] {
+                    button.toolTip = "Club Log Livestream · \(frequency) MHz · \(reportedMode)"
                 } else {
                     button.toolTip = nil
                 }
@@ -467,86 +469,110 @@ final class Delegate: NSObject, NSApplicationDelegate {
     @objc func changeExpedition() {
         if !expedition.isEmpty { UserDefaults.standard.set(expedition, forKey: lastExpeditionKey) }
         refreshSlots()
-        refreshSpots()
+        refreshLiveActivity()
         lookup(automatic: true)
     }
 
-    func refreshSpots(manual: Bool = false) {
+    func refreshLiveActivity(manual: Bool = false) {
         let call = expedition
-        if call != spotCall {
-            spotCall = call
-            spots = []
-            nextSpotRefresh = Date()
-            renderSpots()
+        if call != streamCall {
+            livestream?.stopLoading()
+            livestream = nil
+            streamCall = call
+            liveSlots = [:]
+            liveSlotsValidUntil = .distantPast
+            streamReadInProgress = false
+            refreshSlots()
         }
-        guard !call.isEmpty, !busy else { return }
-        guard Date().timeIntervalSince(lastSpotRequest) >= 15 else {
+        guard let url = streamURL else {
+            nextLiveRefresh = .distantFuture
+            return
+        }
+        if livestream == nil {
+            let configuration = WKWebViewConfiguration()
+            configuration.websiteDataStore = .nonPersistent()
+            let view = WKWebView(frame: NSRect(x: 0, y: 0, width: 780, height: 690), configuration: configuration)
+            livestream = view
+            view.load(URLRequest(url: url))
+            retryStreamAfter = Date().addingTimeInterval(90)
+        }
+        guard let view = livestream, !streamReadInProgress else { return }
+        streamReadInProgress = true
+        nextLiveRefresh = Date().addingTimeInterval(5)
+        view.evaluateJavaScript(Self.liveActivityScript) { [weak self, weak view] result, _ in
+            guard let self, let view, self.livestream === view, self.expedition == call else { return }
+            self.streamReadInProgress = false
+            let snapshot = result as? [String: Any]
+            let slots = snapshot?["slots"] as? [String: [String: String]] ?? [:]
+            let connected = snapshot?["connected"] as? Bool ?? false
+            self.liveSlotsValidUntil = connected ? Date().addingTimeInterval(15) : .distantPast
+            if connected {
+                self.retryStreamAfter = Date().addingTimeInterval(90)
+            } else if Date() >= self.retryStreamAfter {
+                self.retryStreamAfter = Date().addingTimeInterval(90)
+                view.load(URLRequest(url: url))
+            }
+            if slots != self.liveSlots {
+                self.liveSlots = slots
+                self.refreshSlots()
+            }
             if manual {
-                status.stringValue = "HamQTH · Wait 15 seconds between spot refreshes."
-            }
-            return
-        }
-        lastSpotRequest = Date()
-        nextSpotRefresh = Date().addingTimeInterval(60)
-        if manual { status.stringValue = "HamQTH · Loading spots for \(call)…" }
-        worker.request("spots", ["target": call]) { response in
-            guard self.expedition == call else { return }
-            if let error = response["error"] as? String {
-                self.renderSpots()
-                self.status.stringValue = "HamQTH · " + error
-                return
-            }
-            self.spots = response["result"] as? [[String: Any]] ?? []
-            self.renderSpots()
-            if manual {
-                self.status.stringValue = self.spots.isEmpty ? "No recent spots." : "Spots loaded."
+                self.status.stringValue = connected ? "Club Log live activity refreshed." : "Club Log live activity unavailable."
             }
         }
     }
 
-    func renderSpots() {
-        removeExpiredSpots(at: Date())
-        refreshSlots()
+    // Read the activity grid and recent contacts from Club Log's own public page.
+    private static let liveActivityScript = #"""
+        (() => {
+            const connected = typeof lastClubLogUpdateEpoch === 'number'
+                && Date.now() - lastClubLogUpdateEpoch < 90000
+                && typeof bNOAC === 'boolean' && !bNOAC
+                && typeof allListEntries !== 'undefined';
+            const slots = {};
+            if (connected) {
+                // The page orders Last contacts from oldest to newest.
+                for (const entry of allListEntries) {
+                    const mode = ['D', 'C', 'P'][entry.mc];
+                    const cell = document.getElementById(mode + entry.band);
+                    if (!cell?.style.backgroundColor) continue;
+                    const frequency = Number(entry.colFreq);
+                    if (!Number.isFinite(frequency) || frequency < 0.03 || frequency > 74.8) continue;
+                    const label = String(entry.colMode).toUpperCase();
+                    const radioMode = mode === 'C' ? 'CW'
+                        : ['USB', 'LSB'].includes(label) ? label
+                        : ['SSB', 'PHONE'].includes(label) ? (frequency < 10 ? 'LSB' : 'USB')
+                        : label === 'FT8' ? 'FT8' : '';
+                    slots[entry.band + ':' + mode] = {frequency: String(entry.colFreq), mode: label, radioMode};
+                }
+            }
+            return {connected, slots};
+        })()
+        """#
+
+    func liveSlot(_ band: Int, _ mode: String) -> [String: String]? {
+        guard streamCall == expedition, Date() < liveSlotsValidUntil else { return nil }
+        return liveSlots["\(band):\(mode)"]
     }
 
-    private func removeExpiredSpots(at now: Date) {
-        let cutoff = now.timeIntervalSince1970 - spotLifetime
-        spots.removeAll { ($0["timestamp"] as? Double ?? 0) <= cutoff }
-    }
-
-    func tableSpot(_ band: Int, _ mode: String) -> [String: Any]? {
-        guard spotCall == expedition else { return nil }
-        let modes = ["C": ["CW"], "P": ["SSB"], "D": ["FT8", "DIGI"]]
-        let cutoff = Date().timeIntervalSince1970 - spotLifetime
-        return spots.filter {
-            $0["band"] as? String == "\(band)M"
-                && (modes[mode]?.contains($0["mode"] as? String ?? "") ?? false)
-                && ($0["timestamp"] as? Double ?? 0) > cutoff
-        }.max {
-            ($0["timestamp"] as? Double ?? 0) < ($1["timestamp"] as? Double ?? 0)
-        }
-    }
-
-    func tuneSpot(_ spot: [String: Any]) {
-        guard let timestamp = spot["timestamp"] as? Double,
-              Date().timeIntervalSince1970 - timestamp < spotLifetime else {
-            renderSpots()
+    func tuneLiveSlot(_ spot: [String: String]) {
+        guard let mode = spot["radioMode"], !mode.isEmpty else {
+            status.stringValue = "This mode is unavailable for automatic tuning."
             return
         }
-        guard let mode = spot["radioMode"] as? String, !mode.isEmpty else {
-            status.stringValue = "This spot does not specify CW, SSB, or FT8."
-            return
-        }
-        guard let value = spot["frequency"] as? String else { return }
+        guard let value = spot["frequency"] else { return }
         frequency.stringValue = value
         tune(mode)
     }
 
-    func openStream() {
+    private var streamURL: URL? {
         guard !expedition.isEmpty,
-              let encoded = expedition.addingPercentEncoding(withAllowedCharacters: .alphanumerics),
-              let url = URL(string: "https://clublog.org/livestream/" + encoded) else { return }
-        NSWorkspace.shared.open(url)
+              let encoded = expedition.addingPercentEncoding(withAllowedCharacters: .alphanumerics) else { return nil }
+        return URL(string: "https://clublog.org/livestream/" + encoded)
+    }
+
+    func openStream() {
+        if let streamURL { NSWorkspace.shared.open(streamURL) }
     }
 
     func saveToken(_ token: String) {
@@ -558,14 +584,15 @@ final class Delegate: NSObject, NSApplicationDelegate {
 
     func updateRefreshCountdown() {
         let now = Date()
-        let previousSpotCount = spots.count
-        removeExpiredSpots(at: now)
-        if spots.count != previousSpotCount { refreshSlots() }
-        if now >= nextSpotRefresh, !expedition.isEmpty { refreshSpots() }
+        if now >= liveSlotsValidUntil, !liveSlots.isEmpty {
+            liveSlots = [:]
+            refreshSlots()
+        }
+        if now >= nextLiveRefresh || streamCall != expedition { refreshLiveActivity() }
         if now >= nextClubRefresh, !key.stringValue.isEmpty { refreshClubLog() }
         let club = key.stringValue.isEmpty ? "—" : "\(max(0, Int(ceil(nextClubRefresh.timeIntervalSince(now))))) s"
-        let spots = expedition.isEmpty ? "—" : "\(max(0, Int(ceil(nextSpotRefresh.timeIntervalSince(now))))) s"
-        refreshLabel.stringValue = "Club Log \(club)  ·  Spots \(spots)"
+        let live = expedition.isEmpty ? "—" : "\(max(0, Int(ceil(nextLiveRefresh.timeIntervalSince(now))))) s"
+        refreshLabel.stringValue = "Club Log \(club)  ·  Live \(live)"
     }
 
     func refreshClubLog(manual: Bool = false) {
@@ -585,7 +612,7 @@ final class Delegate: NSObject, NSApplicationDelegate {
             if let names = response["result"] as? [String] {
                 self.clubExpeditions = names
                 self.refreshTargets()
-                self.refreshSpots()
+                self.refreshLiveActivity()
             } else if let error = response["error"] as? String {
                 self.status.stringValue = "Expedition · " + error
             }
@@ -627,8 +654,8 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let id = "\(expedition):\(band):\(mode)"
         let saved = slots[id]
         let editing = NSEvent.modifierFlags.contains(.option)
-        if !editing, let spot = tableSpot(band, mode) {
-            tuneSpot(spot)
+        if !editing, let spot = liveSlot(band, mode) {
+            tuneLiveSlot(spot)
             return
         }
         if let saved, !editing,

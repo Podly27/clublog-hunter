@@ -99,43 +99,6 @@ from urllib.error import HTTPError
 import sys
 
 
-def recent_spots(expedition):
-    expedition = callsign(expedition)
-    query = urlencode({"calls": expedition, "limit": 50})
-    with urlopen("https://www.hamqth.com/api/v2/spots?" + query, timeout=8) as response:
-        payload = json.load(response)
-    if not isinstance(payload, dict) or not isinstance(payload.get("spots"), list):
-        raise ValueError("HamQTH returned an unexpected response.")
-    now = datetime.now(timezone.utc)
-    spots = []
-    for row in payload["spots"]:
-        if row.get("dxcall", "").upper() != expedition:
-            continue
-        try:
-            stamp = datetime.fromisoformat(row["time"].replace("Z", "+00:00"))
-            frequency = Decimal(str(row["freq"])) / 1000
-            parse_mhz(str(frequency))
-        except (KeyError, ValueError, TypeError, InvalidOperation):
-            continue
-        if stamp.tzinfo is None or not 0 <= (now - stamp).total_seconds() <= 1800:
-            continue
-        mode = row.get("mode")
-        if mode == "DIGI" and re.search(r"\bFT8\b", row.get("comment") or "", re.I):
-            mode = "FT8"
-        if mode == "SSB":
-            radio_mode = "LSB" if frequency < 10 else "USB"
-        else:
-            radio_mode = mode if mode in ("CW", "FT8") else ""
-        mode = mode or "?"
-        spots.append({
-            "frequency": format(frequency, "f"), "mode": mode, "radioMode": radio_mode,
-            "band": str(row.get("band", "")).upper(),
-            "utc": stamp.astimezone(timezone.utc).strftime("%H:%M"),
-            "timestamp": stamp.timestamp(),
-        })
-    return spots
-
-
 def club_log_error(error, key):
     prefix = f"Club Log HTTP {error.code}."
     with error:
@@ -183,8 +146,6 @@ class Controller:
             temp.write_text(json.dumps(config))
             temp.replace(CONFIG)
             return "Settings saved."
-        if action == "spots":
-            return recent_spots(data["target"])
         if action in ("lookup", "expeditions"):
             key = data["key"].strip()
             if not key:
