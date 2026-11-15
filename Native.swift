@@ -451,14 +451,21 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 let button = rows[row][column]
                 let spot = liveSlot(band, mode)
                 let frequency = spot?["frequency"]
-                let spotTitle = frequency.flatMap(Double.init).map { String(format: "%.3f", $0) }
-                button.title = spotTitle ?? saved ?? (hit ? "" : "—")
+                let displayedFrequency = frequency ?? (spot != nil ? saved : nil)
+                let frequencyTitle = displayedFrequency
+                    .flatMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
+                    .map { String(format: "%.3f", $0) }
+                button.title = frequencyTitle ?? (spot != nil ? "QRV" : (hit ? "" : "—"))
                 let workedColor = NSColor(srgbRed: 0.55, green: 0.83, blue: 0.61, alpha: 1)
                 let qrvColor = NSColor(srgbRed: 1, green: 0.84, blue: 0.39, alpha: 1)
                 let background = hit ? workedColor : (spot != nil ? qrvColor : nil)
                 button.setBackground(background, textColor: background == nil ? .labelColor : .black)
                 if let frequency, let reportedMode = spot?["mode"] {
                     button.toolTip = "Club Log Livestream · \(frequency) MHz · \(reportedMode)"
+                } else if let saved {
+                    button.toolTip = "Saved manually · \(saved) MHz · Option-click to edit"
+                } else if spot != nil {
+                    button.toolTip = "Club Log Livestream · Click to enter a frequency"
                 } else {
                     button.toolTip = nil
                 }
@@ -531,19 +538,28 @@ final class Delegate: NSObject, NSApplicationDelegate {
                 && typeof allListEntries !== 'undefined';
             const slots = {};
             if (connected) {
+                for (const cell of document.querySelectorAll('#activitygridtable td[id]')) {
+                    const match = /^([CPD])(\d+)$/.exec(cell.id);
+                    if (match && cell.style.backgroundColor) {
+                        slots[match[2] + ':' + match[1]] = {};
+                    }
+                }
                 // The page orders Last contacts from oldest to newest.
                 for (const entry of allListEntries) {
                     const mode = ['D', 'C', 'P'][entry.mc];
-                    const cell = document.getElementById(mode + entry.band);
-                    if (!cell?.style.backgroundColor) continue;
+                    const key = entry.band + ':' + mode;
+                    if (!slots[key]) continue;
                     const frequency = Number(entry.colFreq);
-                    if (!Number.isFinite(frequency) || frequency < 0.03 || frequency > 74.8) continue;
+                    if (!Number.isFinite(frequency) || frequency < 0.03 || frequency > 74.8) {
+                        slots[key] = {};
+                        continue;
+                    }
                     const label = String(entry.colMode).toUpperCase();
                     const radioMode = mode === 'C' ? 'CW'
                         : ['USB', 'LSB'].includes(label) ? label
                         : ['SSB', 'PHONE'].includes(label) ? (frequency < 10 ? 'LSB' : 'USB')
                         : label === 'FT8' ? 'FT8' : '';
-                    slots[entry.band + ':' + mode] = {frequency: String(entry.colFreq), mode: label, radioMode};
+                    slots[key] = {frequency: String(entry.colFreq), mode: label, radioMode};
                 }
             }
             return {connected, slots};
@@ -556,11 +572,14 @@ final class Delegate: NSObject, NSApplicationDelegate {
     }
 
     func tuneLiveSlot(_ spot: [String: String]) {
+        guard let value = spot["frequency"] else {
+            status.stringValue = "Club Log reports activity without a frequency."
+            return
+        }
         guard let mode = spot["radioMode"], !mode.isEmpty else {
             status.stringValue = "This mode is unavailable for automatic tuning."
             return
         }
-        guard let value = spot["frequency"] else { return }
         frequency.stringValue = value
         tune(mode)
     }
@@ -654,15 +673,20 @@ final class Delegate: NSObject, NSApplicationDelegate {
         let id = "\(expedition):\(band):\(mode)"
         let saved = slots[id]
         let editing = NSEvent.modifierFlags.contains(.option)
-        if !editing, let spot = liveSlot(band, mode) {
-            tuneLiveSlot(spot)
-            return
-        }
-        if let saved, !editing,
-           let value = saved["frequency"], let radioMode = saved["mode"] {
-            frequency.stringValue = value
-            tune(radioMode)
-            return
+        if !editing {
+            if let spot = liveSlot(band, mode) {
+                if spot["frequency"] != nil {
+                    tuneLiveSlot(spot)
+                    return
+                }
+                if let value = saved?["frequency"], let radioMode = saved?["mode"] {
+                    frequency.stringValue = value
+                    tune(radioMode)
+                    return
+                }
+            } else if worked[lookupKey]?.contains("\(band):\(mode)") == true {
+                return
+            }
         }
         let alert = NSAlert()
         alert.messageText = "\(expedition) · \(band) m"
@@ -677,10 +701,19 @@ final class Delegate: NSObject, NSApplicationDelegate {
         alert.accessoryView = fields
         alert.addButton(withTitle: "Save")
         alert.addButton(withTitle: "Cancel")
-        if saved != nil { alert.addButton(withTitle: "Delete") }
+        if saved != nil {
+            alert.addButton(withTitle: "Tune saved frequency")
+            alert.addButton(withTitle: "Delete")
+        }
         alert.window.initialFirstResponder = field
         let result = alert.runModal()
-        if result == .alertThirdButtonReturn {
+        if result == .alertThirdButtonReturn,
+           let value = saved?["frequency"], let radioMode = saved?["mode"] {
+            frequency.stringValue = value
+            tune(radioMode)
+            return
+        }
+        if result.rawValue == NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1 {
             slots.removeValue(forKey: id)
             refreshSlots()
             save()
