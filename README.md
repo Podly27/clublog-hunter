@@ -6,13 +6,13 @@ ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with 
 
 ## Screenshots
 
-Hunter in simulation with sample data. The main window shows worked slots, recent **12 m CW** contacts, and five CW message buttons with **Stop CW** below them.
+Hunter in Dark appearance. The main window shows worked slots, the **Last contacts** panel, and five CW message buttons with **Stop CW** below them.
 
 ![Hunter overview with recent contacts and CW controls](assets/overview.png)
 
 Open **ClubLog Hunter → Settings…** from the macOS menu bar to configure the radio, Club Log, and appearance.
 
-![Hunter Settings window in simulation](assets/settings.png)
+![Hunter Settings window in Dark appearance](assets/settings.png)
 
 ## Build and launch
 
