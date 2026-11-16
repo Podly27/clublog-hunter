@@ -297,6 +297,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         for band in bands {
             let buttons = modes.map { mode in
                 let button = ActionButton("—") { self.selectSlot(band, mode) }
+                button.rightClick = { self.selectSlot(band, mode, editManually: true) }
                 button.widthAnchor.constraint(equalToConstant: 125).isActive = true
                 button.heightAnchor.constraint(equalToConstant: 24).isActive = true
                 return button
@@ -604,7 +605,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 if let frequency, let reportedMode = spot?["mode"] {
                     button.toolTip = "Club Log Livestream · \(frequency) MHz · \(reportedMode)"
                 } else if let saved {
-                    button.toolTip = "Saved manually · \(saved) MHz · Option-click to edit"
+                    button.toolTip = "Saved manually · \(saved) MHz · Right-click to edit"
                 } else if spot != nil {
                     button.toolTip = "Club Log Livestream · Click to enter a frequency"
                 } else {
@@ -819,17 +820,18 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         }
     }
 
-    func selectSlot(_ band: Int, _ mode: String) {
+    func selectSlot(_ band: Int, _ mode: String, editManually: Bool = false) {
         guard !busy, !expedition.isEmpty else { return }
         let id = "\(expedition):\(band):\(mode)"
         let saved = slots[id]
-        let editing = NSEvent.modifierFlags.contains(.option)
+        let spot = liveSlot(band, mode)
+        let editing = editManually || NSEvent.modifierFlags.contains(.option)
+        if let spot, spot["frequency"] != nil {
+            if !editing { tuneLiveSlot(spot) }
+            return
+        }
         if !editing {
-            if let spot = liveSlot(band, mode) {
-                if spot["frequency"] != nil {
-                    tuneLiveSlot(spot)
-                    return
-                }
+            if spot != nil {
                 if let value = saved?["frequency"], let radioMode = saved?["mode"] {
                     frequency.stringValue = value
                     tune(radioMode)
