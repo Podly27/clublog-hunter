@@ -1,4 +1,4 @@
-# ClubLog Hunter
+# ClubLog Hunter (helper) for IC3700MK2
 
 ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with an Icom IC‑7300MK2. It puts Club Log Livestream frequencies and your worked band/mode combinations in one table. Click a supported frequency to tune the radio via CI‑V.
 
