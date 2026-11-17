@@ -106,11 +106,13 @@ class Radio:
         if self.command(b"\x1c\x00", b"\x1c\x00") != b"\x00":
             raise ValueError("The radio is transmitting or did not report RX mode.")
 
-    def tune(self, hz, mode):
+    def tune(self, hz, mode, tx_hz=None):
         modes = {"LSB": (0, 0), "USB": (1, 0), "CW": (3, 0), "FT8": (1, 1)}
         code, data = modes[mode]
         self.require_rx()
         self.command(b"\x07\x00")  # Enter VFO mode and select VFO A on the IC-7300MK2.
+        split = b"\x01" if tx_hz is not None and mode != "FT8" else b"\x00"
+        self.command(b"\x0f\x00")
         if mode == "FT8":
             self.command(b"\x1a\x05\x00\x85\x01")
         elif mode in ("LSB", "USB"):
@@ -120,6 +122,17 @@ class Radio:
         self.command(mode_command)
         if self.frequency() != hz or self.command(b"\x26\x00", b"\x26\x00") != mode_command[2:]:
             raise ValueError("The radio reported a different frequency or mode after tuning.")
+
+        if split == b"\x01":
+            freq_b, mode_b = b"\x25\x01", b"\x26\x01"
+            encoded = bcd_frequency(tx_hz)
+            self.command(freq_b + encoded)
+            self.command(mode_b + mode_command[2:])
+            if self.command(freq_b, freq_b) != encoded or self.command(mode_b, mode_b) != mode_command[2:]:
+                raise ValueError("The radio reported a different transmit frequency or mode.")
+            self.command(b"\x0f" + split)
+        if self.command(b"\x0f", b"\x0f") != split:
+            raise ValueError("The radio reported a different split setting.")
 
     def send_cw(self, value):
         payload = cw_message(value)
@@ -142,12 +155,14 @@ class Simulator:
     def __init__(self):
         self.hz = 14074000
         self.mode = "FT8"
+        self.tx_hz = None
 
     def frequency(self):
         return self.hz
 
-    def tune(self, hz, mode):
+    def tune(self, hz, mode, tx_hz=None):
         self.hz, self.mode = hz, mode
+        self.tx_hz = None if mode == "FT8" else tx_hz
 
     def mode_group(self):
         return {"CW": "C", "FT8": "D", "USB": "P", "LSB": "P"}[self.mode]

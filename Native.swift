@@ -139,6 +139,11 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     }
 
     let worker = Worker()
+    private let clusterWorker = Worker()
+    private var clusterSpots: [[String: Any]] = []
+    private var clusterCall = ""
+    private var nextClusterRefresh = Date.distantPast
+    private var clusterReadInProgress = false
     var window: NSWindow!
     private var settingsWindow: NSWindow?
     let status = NSTextField(labelWithString: "Radio disconnected")
@@ -176,7 +181,6 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     private var liveSlotsValidUntil = Date.distantPast
     private var streamReadInProgress = false
     private var retryStreamAfter = Date.distantPast
-    let frequency = NSTextField(string: "14.074")
     let operatorCall = NSTextField()
     let targets = NSTextField(string: "C8K")
     let port = NSComboBox()
@@ -592,20 +596,17 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 let saved = slots["\(expedition):\(band):\(mode)"]?["frequency"]
                 let button = rows[row][column]
                 let spot = liveSlot(band, mode)
-                let frequency = spot?["frequency"]
-                let displayedFrequency = frequency ?? (spot != nil ? saved : nil)
-                let frequencyTitle = displayedFrequency
-                    .flatMap { Double($0.replacingOccurrences(of: ",", with: ".")) }
-                    .map { String(format: "%.3f", $0) }
-                button.title = frequencyTitle ?? (spot != nil ? "QRV" : (hit ? "" : "—"))
+                let live = spot.flatMap { liveFrequency($0, band: band, mode: mode, saved: saved) }
+                let displayedFrequency = live?.value ?? saved
+                button.title = displayedFrequency ?? (spot != nil ? "QRV" : (hit ? "" : "—"))
                 let workedColor = NSColor(srgbRed: 0.55, green: 0.83, blue: 0.61, alpha: 1)
                 let qrvColor = NSColor(srgbRed: 1, green: 0.84, blue: 0.39, alpha: 1)
                 let background = hit ? workedColor : (spot != nil ? qrvColor : nil)
                 button.setBackground(background, textColor: background == nil ? .labelColor : .black)
-                if let frequency, let reportedMode = spot?["mode"] {
-                    button.toolTip = "Club Log Livestream · \(frequency) MHz · \(reportedMode)"
-                } else if let saved {
-                    button.toolTip = "Saved manually · \(saved) MHz · Right-click to edit"
+                if let live, let reportedMode = spot?["mode"] {
+                    button.toolTip = "Club Log Livestream · \(reportedMode)" + live.source + " · Right-click to edit"
+                } else if saved != nil {
+                    button.toolTip = "Saved manually · Right-click to edit"
                 } else if spot != nil {
                     button.toolTip = "Club Log Livestream · Click to enter a frequency"
                 } else {
@@ -619,6 +620,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         if !expedition.isEmpty { UserDefaults.standard.set(expedition, forKey: lastExpeditionKey) }
         refreshSlots()
         refreshLiveActivity()
+        refreshCluster()
         lookup(automatic: true)
     }
 
@@ -721,17 +723,56 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         return liveSlots["\(band):\(mode)"]
     }
 
-    func tuneLiveSlot(_ spot: [String: String]) {
-        guard let value = spot["frequency"] else {
-            statusMessage = "Club Log reports activity without a frequency."
-            return
+    private func receiveHz(_ value: String) -> Int? {
+        let base = value.split(whereSeparator: { $0.isWhitespace || $0 == "+" || $0 == "-" }).first
+        guard let base, let mhz = Double(base.replacingOccurrences(of: ",", with: ".")),
+              (0.03...74.8).contains(mhz) else { return nil }
+        return Int((mhz * 1_000_000).rounded())
+    }
+
+    private func liveFrequency(_ spot: [String: String], band: Int, mode: String, saved: String?)
+        -> (value: String, source: String)? {
+        guard let value = spot["frequency"], let rx = receiveHz(value) else { return nil }
+        let base = String(format: "%.6f", Double(rx) / 1_000_000)
+            .replacingOccurrences(of: #"0{1,3}$"#, with: "", options: .regularExpression)
+        guard mode != "D" else { return (base, "") }
+        if let saved, receiveHz(saved) == rx, saved.contains("+") || saved.contains("-") {
+            return (saved, " · Manual split")
         }
-        guard let mode = spot["radioMode"], !mode.isEmpty else {
-            statusMessage = "This mode is unavailable for automatic tuning."
-            return
+        let now = Date().timeIntervalSince1970
+        if clusterCall == expedition,
+           let match = clusterSpots.first(where: {
+               guard $0["slot"] as? String == "\(band):\(mode)",
+                     let clusterRX = $0["rx"] as? Int, let expiry = $0["expires"] as? Double else { return false }
+               return expiry > now && abs(clusterRX - rx) <= 500
+           }),
+           let tx = match["tx"] as? Int, tx != rx {
+            let offset = String(format: "%+.3f", Double(tx - rx) / 1000)
+                .replacingOccurrences(of: #"\.?0+$"#, with: "", options: .regularExpression)
+            return ("\(base) \(offset)", " · Split from HamQTH")
         }
-        frequency.stringValue = value
-        tune(mode)
+        return (base, "")
+    }
+
+    private func refreshCluster() {
+        let call = expedition
+        if call != clusterCall {
+            clusterCall = call
+            clusterSpots = []
+            nextClusterRefresh = .distantPast
+            refreshSlots()
+        }
+        guard !call.isEmpty, !clusterReadInProgress, Date() >= nextClusterRefresh else { return }
+        clusterReadInProgress = true
+        nextClusterRefresh = Date().addingTimeInterval(30)
+        clusterWorker.request("cluster_splits", ["target": call]) { response in
+            self.clusterReadInProgress = false
+            guard self.clusterCall == call, self.expedition == call else { return }
+            if let spots = response["result"] as? [[String: Any]] {
+                self.clusterSpots = spots
+                self.refreshSlots()
+            }
+        }
     }
 
     private var streamURL: URL? {
@@ -760,6 +801,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             refreshContacts()
         }
         if now >= nextLiveRefresh || streamCall != expedition { refreshLiveActivity() }
+        let spotCount = clusterSpots.count
+        clusterSpots.removeAll { ($0["expires"] as? Double ?? 0) <= now.timeIntervalSince1970 }
+        if clusterSpots.count != spotCount { refreshSlots() }
+        refreshCluster()
         if now >= nextClubRefresh, !key.stringValue.isEmpty { refreshClubLog() }
         let club = key.stringValue.isEmpty ? "—" : "\(max(0, Int(ceil(nextClubRefresh.timeIntervalSince(now))))) s"
         let live = expedition.isEmpty ? "—" : "\(max(0, Int(ceil(nextLiveRefresh.timeIntervalSince(now))))) s"
@@ -826,25 +871,26 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let saved = slots[id]
         let spot = liveSlot(band, mode)
         let editing = editManually || NSEvent.modifierFlags.contains(.option)
-        if let spot, spot["frequency"] != nil {
-            if !editing { tuneLiveSlot(spot) }
-            return
-        }
         if !editing {
-            if spot != nil {
-                if let value = saved?["frequency"], let radioMode = saved?["mode"] {
-                    frequency.stringValue = value
-                    tune(radioMode)
+            if let spot, let live = liveFrequency(spot, band: band, mode: mode, saved: saved?["frequency"]) {
+                guard let radioMode = spot["radioMode"], !radioMode.isEmpty else {
+                    statusMessage = "This mode is unavailable for automatic tuning."
                     return
                 }
-            } else if worked[lookupKey]?.contains("\(band):\(mode)") == true {
+                tune(radioMode, frequency: live.value)
                 return
             }
+            if let value = saved?["frequency"], let radioMode = saved?["mode"] {
+                tune(radioMode, frequency: value)
+                return
+            }
+            if spot == nil, worked[lookupKey]?.contains("\(band):\(mode)") == true { return }
         }
         let alert = NSAlert()
         alert.messageText = "\(expedition) · \(band) m"
-        alert.informativeText = "Enter a frequency in MHz."
-        let field = NSTextField(string: saved?["frequency"] ?? "")
+        alert.informativeText = mode == "D" ? "Enter a frequency in MHz. Split is off in FT8."
+            : "Enter MHz and an optional split in kHz, for example 14.055 +5."
+        let field = NSTextField(string: saved?["frequency"] ?? spot?["frequency"] ?? "")
         let sideband = NSPopUpButton()
         sideband.addItems(withTitles: ["USB", "LSB"])
         sideband.selectItem(withTitle: saved?["mode"] ?? (band >= 40 ? "LSB" : "USB"))
@@ -862,8 +908,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         let result = alert.runModal()
         if result == .alertThirdButtonReturn,
            let value = saved?["frequency"], let radioMode = saved?["mode"] {
-            frequency.stringValue = value
-            tune(radioMode)
+            tune(radioMode, frequency: value)
             return
         }
         if result.rawValue == NSApplication.ModalResponse.alertThirdButtonReturn.rawValue + 1 {
@@ -873,18 +918,16 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         }
         guard result == .alertFirstButtonReturn else { return }
         let value = field.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard let mhz = Double(value.replacingOccurrences(of: ",", with: ".")), (0.03...74.8).contains(mhz) else {
-            statusMessage = "Enter a frequency in MHz, for example 14.074."
-            return
-        }
         let radioMode = mode == "P" ? (sideband.titleOfSelectedItem ?? "USB") : (mode == "C" ? "CW" : "FT8")
-        slots[id] = ["frequency": value, "mode": radioMode]
-        refreshSlots()
-        save()
+        run("validate_frequency", ["frequency": value]) { _ in
+            self.slots[id] = ["frequency": value, "mode": radioMode]
+            self.refreshSlots()
+            self.save()
+        }
     }
 
-    func tune(_ mode: String) {
-        run("tune", ["frequency": frequency.stringValue, "mode": mode]) { _ in self.checkRadioConnection() }
+    private func tune(_ mode: String, frequency: String) {
+        run("tune", ["frequency": frequency, "mode": mode]) { _ in self.checkRadioConnection() }
     }
 
 }

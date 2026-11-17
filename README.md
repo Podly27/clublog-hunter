@@ -1,14 +1,14 @@
 # ClubLog Hunter (helper) for IC-7300MK2
 
-ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with an Icom IC‑7300MK2. It puts Club Log Livestream frequencies and your worked band/mode combinations in one table. Click a supported frequency to tune the radio via CI‑V.
+ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with an Icom IC‑7300MK2. It shows Club Log Livestream frequencies, split offsets, and your worked band and mode combinations in one table. Click a supported frequency to tune the radio via CI‑V.
 
 ![ClubLog Hunter app icon](assets/icon.png)
 
 ## Screenshots
 
-Hunter in Dark appearance. The main window shows worked slots, the **Last contacts** panel, and five CW message buttons with **Stop CW** below them.
+Hunter in Dark appearance. The main window shows worked slots, the **Last contacts** panel, and the CW message controls. A CW cell showing `24.890 +2` tunes receive to 24.890 MHz and transmit to 24.892 MHz.
 
-![Hunter overview with recent contacts and CW controls](assets/overview-dark.png)
+![Hunter overview in Dark appearance with CW split offsets and recent contacts](assets/overview-dark.png)
 
 Open **ClubLog Hunter → Settings…** from the macOS menu bar to configure the radio, Club Log, and appearance.
 
@@ -38,7 +38,8 @@ The build produces a locally signed app bundle.
 - **Overview** reads active band and mode combinations and their latest reported frequencies from the public Club Log Livestream. The app checks the page every five seconds. **Refresh live activity** checks immediately, and **Livestream web** opens the same page in your browser.
 - **Last contacts** lists recent Livestream QSOs for the selected expedition, newest first. It follows the radio's band and Club Log mode group (CW, Phone, or Data). The app checks the radio every five seconds, including when you retune with the radio's controls. Each row shows the callsign, frequency in MHz when reported, and the logged mode. A dash marks a contact whose frequency was omitted.
 - Yellow cells show live activity. A cell displays **QRV** when the livestream reports activity without a frequency. Green cells show your worked slots and take precedence over yellow. The live indication disappears when the slot goes inactive or live data becomes unavailable.
-- Click a live frequency to tune **VFO A**. Click **QRV** to enter a frequency when the livestream omits it. While that slot is active, the saved frequency appears in the cell and can be clicked to tune. Hover over the cell to see that the frequency was entered manually. Right-click the cell to edit or remove the saved frequency whenever the livestream has no frequency for that slot.
+- Click a frequency in the table to tune VFO A. Right-click a slot to save or edit its manual frequency. Click the saved cell to tune it, or use **Tune saved frequency** in its edit dialog when a live frequency takes precedence. For CW and Phone, `14.055 +5` means receive at 14.055 MHz and transmit at 14.060 MHz on VFO B. A negative offset works the same way. Data / FT8 always turns the radio's split off. CW and Phone turn it off when no offset is available.
+- Hunter checks [HamQTH](https://www.hamqth.com/dxc) for recent spots for the selected expedition. When the callsign, mode, band and receive frequency match, an explicit hint such as `UP 5`, `DOWN 2`, or `QSX 14060` appears beside the livestream frequency. A manual offset saved for the same receive frequency takes priority. Bare `UP` and ranges do not select a transmit frequency.
 - In **Settings → Appearance**, select **Light**, **Dark**, or **System** to follow the macOS setting. Hunter remembers your choice.
 
 ## CW messages

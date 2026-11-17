@@ -31,6 +31,77 @@ def parse_mhz(value):
     raise ValueError("Enter a frequency in MHz, for example 14.074.")
 
 
+NUMBER = r"\d+(?:[.,]\d+)?"
+FREQUENCY_WITH_SPLIT = re.compile(rf"\s*({NUMBER})(?:\s*([+-])\s*({NUMBER})\s*(?:kHz)?)?\s*", re.I)
+
+
+def parse_frequency(value):
+    match = FREQUENCY_WITH_SPLIT.fullmatch(value)
+    if not match:
+        raise ValueError("Enter MHz, with an optional split in kHz: 14.055 +5.")
+    base, sign, offset = match.groups()
+    rx = parse_mhz(base)
+    if not offset:
+        return rx, None
+    delta = Decimal(sign + offset.replace(",", ".")) * 1000
+    tx = rx + delta
+    if not 30_000 <= tx <= 74_800_000 or tx != int(tx) or not delta:
+        raise ValueError("Enter a nonzero split in kHz with up to three decimal places.")
+    return rx, int(tx)
+
+
+def cluster_tx(comment, rx):
+    # Match explicit offsets or an absolute listening frequency. Skip ranges and bare UP.
+    if re.search(r"(?<!\w)(?:UP|DN|DOWN)(?![A-Z])\s*\d+([.,]\d+)?\s*(?:[-–—/]|TO\b)\s*\d", comment, re.I):
+        return None
+    hints = set()
+    for match in re.finditer(rf"(?<![\w.,+-])(?:(UP|DN|DOWN)\s*|([+-])\s*)({NUMBER})(?![\w.,])", comment, re.I):
+        word, sign, number = match.groups()
+        # A standalone signed number can be a signal report. Require kHz in that notation.
+        if sign and not re.match(r"\s*kHz\b", comment[match.end():], re.I):
+            continue
+        value = Decimal(number.replace(",", "."))
+        if 0 < value <= 100:
+            hints.add(rx + value * (1000 if (word or sign).upper() in ("UP", "+") else -1000))
+    for match in re.finditer(rf"\b(?:QSX|LISTENING(?:\s+ON)?)\s+({NUMBER})(?![\w.,])", comment, re.I):
+        value = Decimal(match[1].replace(",", "."))
+        tx = value * (1000 if value >= 1000 else 1_000_000)
+        if 0 < abs(tx - rx) <= 100_000:
+            hints.add(tx)
+    if len(hints) == 1:
+        tx = hints.pop()
+        if 30_000 <= tx <= 74_800_000 and tx == int(tx):
+            return int(tx)
+    return None
+
+
+def cluster_splits(target):
+    query = urlencode({"calls": target, "modes": "CW,SSB", "limit": 100})
+    request = Request("https://www.hamqth.com/api/v2/spots?" + query, headers={"Accept": "application/json"})
+    with urlopen(request, timeout=5) as response:
+        payload = json.load(response, parse_float=Decimal)
+    now = datetime.now(timezone.utc)
+    result = []
+    for spot in payload["spots"]:
+        try:
+            if spot["dxcall"].upper() != target:
+                continue
+            when = datetime.fromisoformat(spot["time"].replace("Z", "+00:00"))
+            mode = {"CW": "C", "SSB": "P", "USB": "P", "LSB": "P"}.get(spot.get("mode"))
+            band = int(spot["band"].removesuffix("M"))
+            rx = parse_mhz(str(Decimal(str(spot["freq"])) / 1000))
+            if not mode or band not in BANDS or not now - timedelta(minutes=10) <= when <= now + timedelta(minutes=1):
+                continue
+            tx = cluster_tx(spot.get("comment") or "", rx)
+        except (KeyError, TypeError, ValueError, InvalidOperation):
+            continue
+        row = {"slot": f"{band}:{mode}", "rx": rx, "expires": (when + timedelta(minutes=10)).timestamp()}
+        if tx is not None:
+            row["tx"] = tx
+        result.append((when, row))
+    return [row for _, row in sorted(result, key=lambda item: item[0], reverse=True)]
+
+
 def club_expeditions(token):
     request = Request(
         "https://clublog.org/api/v1/expeditions?v=2",
@@ -160,6 +231,11 @@ class Controller:
                 if exc.code in (401, 403):
                     self.rejected_keys.add(key)
                 raise ValueError(club_log_error(exc, key)) from None
+        if action == "cluster_splits":
+            return cluster_splits(callsign(data["target"]))
+        if action == "validate_frequency":
+            parse_frequency(data["frequency"])
+            return "Frequency validated."
         if action == "radio_status":
             if self.radio is None:
                 return {"connected": False}
@@ -203,11 +279,17 @@ class Controller:
         if action == "vfo":
             return f"{self.radio.frequency() / 1e6:.6f}"
         if action == "tune":
-            hz, mode = parse_mhz(data["frequency"]), data["mode"]
+            hz, tx = parse_frequency(data["frequency"])
+            mode = data["mode"]
+            if mode == "PHONE":
+                mode = "LSB" if hz < 10_000_000 else "USB"
             if mode not in ("FT8", "CW", "USB", "LSB"):
                 raise ValueError("Unknown operating mode.")
-            self.radio.tune(hz, mode)
-            return f"{hz / 1e6:.6f} MHz · {mode}"
+            if mode == "FT8":
+                tx = None
+            self.radio.tune(hz, mode, tx)
+            split_status = f"TX {tx / 1e6:.6f} MHz" if tx is not None else "Split off"
+            return f"{hz / 1e6:.6f} MHz · {mode} · {split_status}"
         if action == "stop_cw":
             self.radio.stop_cw()
             return "CW stop command acknowledged."
