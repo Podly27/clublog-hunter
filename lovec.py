@@ -4,7 +4,7 @@ from glob import glob
 import json
 from pathlib import Path
 import re
-from urllib.parse import quote, urlencode
+from urllib.parse import parse_qs, quote, urlencode
 from urllib.request import Request, urlopen
 
 from radio import Civ, Radio, Simulator
@@ -100,6 +100,54 @@ def cluster_splits(target):
             row["tx"] = tx
         result.append((when, row))
     return [row for _, row in sorted(result, key=lambda item: item[0], reverse=True)]
+
+
+def qrz_insert(data):
+    station = callsign(data["station"])
+    contact = callsign(data["contact"])
+    band = data["band"]
+    mode = data["mode"]
+    if band not in {f"{meters}m" for meters in BANDS}:
+        raise ValueError("Select the QSO band.")
+    if mode not in ("CW", "SSB", "FT8"):
+        raise ValueError("Select the QSO mode.")
+    try:
+        utc = datetime.strptime(data["utc"].strip(), "%Y-%m-%d %H:%M").replace(tzinfo=timezone.utc)
+    except ValueError:
+        raise ValueError("Use YYYY-MM-DD HH:MM for the QSO time in UTC.") from None
+    if utc > datetime.now(timezone.utc):
+        raise ValueError("The QSO time in UTC is in the future.")
+
+    adif_fields = {
+        "CALL": contact, "STATION_CALLSIGN": station, "BAND": band.upper(),
+        "MODE": mode,
+        "QSO_DATE": utc.strftime("%Y%m%d"), "TIME_ON": utc.strftime("%H%M"),
+    }
+    adif = "".join(f"<{name}:{len(value)}>{value}" for name, value in adif_fields.items()) + "<EOR>"
+    key = data["key"].strip()
+    if not key:
+        raise ValueError("Save the QRZ Logbook API key in Settings first.")
+    body = urlencode({"KEY": key, "ACTION": "INSERT", "ADIF": adif}).encode("ascii")
+    request = Request(
+        "https://logbook.qrz.com/api", data=body,
+        headers={"User-Agent": "ClubLog-Hunter/0.3.6", "Content-Type": "application/x-www-form-urlencoded"},
+    )
+    try:
+        with urlopen(request, timeout=12) as response:
+            reply = parse_qs(response.read(16_384).decode("utf-8", errors="replace").strip())
+    except HTTPError as error:
+        raise ValueError(f"QRZ returned HTTP {error.code}. Check the logbook before retrying.") from None
+    except OSError:
+        raise ValueError("No response from QRZ. Check the logbook before retrying.") from None
+    result = reply.get("RESULT", [""])[0]
+    if result == "OK" and reply.get("COUNT") == ["1"]:
+        return f"QSO with {contact} logged to QRZ.com."
+    if result == "AUTH":
+        raise ValueError("QRZ rejected access. Check the logbook API key and subscription.")
+    if result == "FAIL":
+        reason = reply.get("REASON", ["QRZ did not accept the QSO."])[0]
+        raise ValueError("QRZ: " + " ".join(reason.replace(key, "[redacted]").split())[:180])
+    raise ValueError("QRZ did not confirm the upload. Check the logbook before retrying.")
 
 
 def club_expeditions(token):
@@ -203,6 +251,8 @@ class Controller:
         self.rejected_keys = set()
 
     def run(self, action, data):
+        if action == "qrz_insert":
+            return qrz_insert(data)
         if action == "setup":
             try:
                 config = json.loads(CONFIG.read_text())

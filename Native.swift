@@ -2,15 +2,17 @@ import AppKit
 import Security
 import WebKit
 
-private enum ClubLogKeychain {
-    static let query: [String: Any] = [
-        kSecClass as String: kSecClassGenericPassword,
-        kSecAttrService as String: "cz.dxlovec.native.clublog",
-        kSecAttrAccount as String: "api-token"
-    ]
+private enum APIKeychain {
+    private static func query(_ service: String) -> [String: Any] {
+        [
+            kSecClass as String: kSecClassGenericPassword,
+            kSecAttrService as String: "cz.dxlovec.native." + service,
+            kSecAttrAccount as String: "api-token"
+        ]
+    }
 
-    static func read() -> String? {
-        var request = query
+    static func read(_ service: String) -> String? {
+        var request = query(service)
         request[kSecReturnData as String] = true
         var result: CFTypeRef?
         guard SecItemCopyMatching(request as CFDictionary, &result) == errSecSuccess,
@@ -18,7 +20,8 @@ private enum ClubLogKeychain {
         return String(data: data, encoding: .utf8)
     }
 
-    static func save(_ token: String) -> OSStatus {
+    static func save(_ token: String, service: String) -> OSStatus {
+        let query = query(service)
         if token.isEmpty {
             let result = SecItemDelete(query as CFDictionary)
             return result == errSecItemNotFound ? errSecSuccess : result
@@ -140,6 +143,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
 
     let worker = Worker()
     private let clusterWorker = Worker()
+    private let qrzWorker = Worker()
+    private let qrzKey = NSSecureTextField()
+    private var qrzUploadInProgress = false
+    private var qrzDraft: [String: String]?
     private var clusterSpots: [[String: Any]] = []
     private var clusterCall = ""
     private var nextClusterRefresh = Date.distantPast
@@ -236,7 +243,8 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 if let saved = config[name] as? String { field.stringValue = saved }
             }
             self.slots = config["frequencies"] as? [String: [String: String]] ?? [:]
-            self.key.stringValue = ClubLogKeychain.read() ?? ""
+            self.key.stringValue = APIKeychain.read("clublog") ?? ""
+            self.qrzKey.stringValue = APIKeychain.read("qrz") ?? ""
             self.refreshTargets()
             self.refreshLiveActivity()
             self.connect(false)
@@ -315,7 +323,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         columns.alignment = .top
         let layout = stack([head, columns, buildCWMessages()], spacing: 12)
         layout.setCustomSpacing(2 * cwButtonHeight, after: head)
-        layout.setCustomSpacing(2 * cwButtonHeight, after: columns)
+        layout.setCustomSpacing(36, after: columns)
         layout.alignment = .centerX
         return layout
     }
@@ -401,11 +409,14 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             return button
         }
         let stop = ActionButton("Stop CW") { [weak self] in self?.run("stop_cw") }
-        stop.controlSize = .large
-        stop.font = .systemFont(ofSize: 15, weight: .medium)
-        stop.widthAnchor.constraint(equalToConstant: 296).isActive = true
-        stop.heightAnchor.constraint(equalToConstant: cwButtonHeight).isActive = true
-        let layout = stack([stack(buttons, vertical: false), stop])
+        let logQSO = ActionButton("Log to QRZ.com") { [weak self] in self?.logToQRZ() }
+        for button in [stop, logQSO] {
+            button.controlSize = .large
+            button.font = .systemFont(ofSize: 15, weight: .medium)
+            button.widthAnchor.constraint(equalToConstant: 296).isActive = true
+            button.heightAnchor.constraint(equalToConstant: cwButtonHeight).isActive = true
+        }
+        let layout = stack([stack(buttons, vertical: false), stop, logQSO])
         layout.alignment = .centerX
         return layout
     }
@@ -465,9 +476,10 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         appearance.action = #selector(changeAppearance(_:))
         layout.addArrangedSubview(stack([label("Appearance", width: 170), appearance], vertical: false))
 
+        qrzKey.toolTip = "Copy the API key for your logbook from QRZ.com Logbook Settings."
         let entries: [(String, NSTextField)] = [
             ("My callsign", operatorCall), ("Watched callsigns", targets),
-            ("Club Log API token", key), ("CI-V port", port),
+            ("Club Log API token", key), ("QRZ Logbook API key", qrzKey), ("CI-V port", port),
             ("Baud rate", baud), ("CI-V address (hex)", address)
         ]
         for (title, field) in entries {
@@ -555,11 +567,83 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
         var data: [String: Any] = fields.mapValues { $0.stringValue }
         data["frequencies"] = slots
         let token = key.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        let qrzToken = qrzKey.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         run("save", data) { _ in
-            if includeToken { self.saveToken(token) }
+            if includeToken {
+                self.saveToken(token)
+                let result = APIKeychain.save(qrzToken, service: "qrz")
+                if result != errSecSuccess {
+                    self.statusMessage = "Could not save the QRZ API key in Keychain (\(result))."
+                }
+            }
             self.refreshTargets()
             self.refreshLiveActivity()
             if includeToken { self.refreshClubLog() }
+        }
+    }
+
+    private func logToQRZ() {
+        guard !qrzUploadInProgress else { return }
+        guard let apiKey = APIKeychain.read("qrz"), !apiKey.isEmpty else {
+            showSettings()
+            statusMessage = "Enter and save your QRZ Logbook API key in Settings."
+            return
+        }
+
+        let clock = DateFormatter()
+        clock.locale = Locale(identifier: "en_US_POSIX")
+        clock.timeZone = TimeZone(secondsFromGMT: 0)
+        clock.dateFormat = "yyyy-MM-dd HH:mm"
+
+        let draft = qrzDraft ?? [:]
+        let station = NSTextField(string: draft["station"] ?? operatorCall.stringValue)
+        let contact = NSTextField(string: draft["contact"] ?? expedition)
+        let utc = NSTextField(string: draft["utc"] ?? clock.string(from: Date()))
+        let band = NSPopUpButton()
+        band.addItems(withTitles: ["Choose band"] + bands.map { "\($0)m" })
+        let mode = NSPopUpButton()
+        mode.addItems(withTitles: ["Choose mode", "CW", "SSB", "FT8"])
+        let radioBand = simulated ? nil : tunedBand
+        let radioMode = simulated ? nil : tunedMode
+        if let value = draft["band"] ?? radioBand.map({ "\($0)m" }) { band.selectItem(withTitle: value) }
+        if let value = draft["mode"] ?? ["C": "CW", "P": "SSB"][radioMode ?? ""] { mode.selectItem(withTitle: value) }
+
+        let fields = [("My callsign", station), ("Worked callsign", contact), ("Date and time (UTC)", utc)]
+        let rows = fields.map { title, field in
+            field.widthAnchor.constraint(equalToConstant: 180).isActive = true
+            return stack([label(title, width: 130), field], vertical: false)
+        } + [
+            stack([label("Band", width: 130), band], vertical: false),
+            stack([label("Mode", width: 130), mode], vertical: false)
+        ]
+        let form = stack(rows, spacing: 6)
+        form.frame.size = form.fittingSize
+        let alert = NSAlert()
+        alert.messageText = "Log QSO to QRZ.com"
+        alert.informativeText = "Review the details for a completed contact before sending. UTC format: YYYY-MM-DD HH:MM."
+        alert.accessoryView = form
+        alert.addButton(withTitle: "Send to QRZ")
+        alert.addButton(withTitle: "Cancel")
+        alert.window.initialFirstResponder = contact
+        guard alert.runModal() == .alertFirstButtonReturn else { return }
+
+        let details = [
+            "station": station.stringValue, "contact": contact.stringValue,
+            "utc": utc.stringValue, "band": band.titleOfSelectedItem ?? "", "mode": mode.titleOfSelectedItem ?? ""
+        ]
+        qrzDraft = details
+        var request = details
+        request["key"] = apiKey
+        qrzUploadInProgress = true
+        statusMessage = "Sending QSO to QRZ.com…"
+        qrzWorker.request("qrz_insert", request) { response in
+            self.qrzUploadInProgress = false
+            if let error = response["error"] as? String {
+                self.statusMessage = error
+            } else {
+                self.qrzDraft = nil
+                self.statusMessage = response["result"] as? String ?? "QSO sent to QRZ."
+            }
         }
     }
 
@@ -672,7 +756,13 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
             self.recentContacts = snapshot?["contacts"] as? [[String: String]] ?? []
             self.refreshContacts()
             if manual {
-                self.statusMessage = connected ? "Club Log live activity refreshed." : "Club Log live activity unavailable."
+                if !connected {
+                    self.statusMessage = "Club Log live activity unavailable."
+                } else if snapshot?["recentQSO"] as? Bool == true {
+                    self.statusMessage = "Club Log live activity refreshed."
+                } else {
+                    self.statusMessage = "Club Log reports no QSO in the last 10 minutes."
+                }
             }
         }
     }
@@ -684,8 +774,20 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 && Date.now() - lastClubLogUpdateEpoch < 90000
                 && typeof bNOAC === 'boolean' && !bNOAC
                 && typeof allListEntries !== 'undefined';
+            // The grid can stay colored after Club Log's Last QSO moves to the < 1 hour bucket.
+            const maxQSOAge = 10 * 60;
+            const lastQSO = typeof lastQSOEpoch !== 'undefined' ? Number(lastQSOEpoch) : 0;
+            const qsoAge = Date.now() / 1000 - lastQSO;
+            const ageLabel = (document.getElementById('LastQSO')?.textContent ?? '').trim();
+            const ageParts = /^(\d+)\s+(seconds?|minutes?)\s+ago$/i.exec(ageLabel);
+            const labelAge = ageParts ? Number(ageParts[1]) * (/^minute/i.test(ageParts[2]) ? 60 : 1) : Infinity;
+            const recentQSO = connected && allListEntries.length > 0 && (
+                Number.isFinite(lastQSO) && lastQSO > 0
+                    ? qsoAge >= 0 && qsoAge < maxQSOAge
+                    : labelAge < maxQSOAge || /^<\s*(?:90 seconds|10 mins|10 minutes)$/i.test(ageLabel)
+            );
             const slots = {};
-            if (connected) {
+            if (recentQSO) {
                 for (const cell of document.querySelectorAll('#activitygridtable td[id]')) {
                     const match = /^([CPD])(\d+)$/.exec(cell.id);
                     if (match && cell.style.backgroundColor) {
@@ -714,7 +816,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
                 band: String(entry.band), group: ['D', 'C', 'P'][entry.mc] ?? '',
                 call: String(entry.call), frequency: String(entry.colFreq), mode: String(entry.colMode)
             })) : [];
-            return {connected, slots, contacts};
+            return {connected, recentQSO, slots, contacts};
         })()
         """#
 
@@ -786,7 +888,7 @@ final class Delegate: NSObject, NSApplicationDelegate, NSTableViewDataSource, NS
     }
 
     func saveToken(_ token: String) {
-        let result = ClubLogKeychain.save(token)
+        let result = APIKeychain.save(token, service: "clublog")
         if result != errSecSuccess {
             statusMessage = "Could not save the token in Keychain (\(result))."
         }

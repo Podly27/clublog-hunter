@@ -6,13 +6,13 @@ ClubLog Hunter is a native macOS app for hunting amateur radio DXpeditions with 
 
 ## Screenshots
 
-Hunter in Dark appearance. The main window shows worked slots, the **Last contacts** panel, and the CW message controls. A CW cell showing `24.890 +2` tunes receive to 24.890 MHz and transmit to 24.892 MHz.
+Hunter in Dark appearance. The main window shows worked slots, the **Last contacts** panel, and the CW message controls. **Log to QRZ.com** sits directly below **Stop CW**. A CW cell showing `24.890 +2` tunes receive to 24.890 MHz and transmit to 24.892 MHz.
 
-![Hunter overview in Dark appearance with CW split offsets and recent contacts](assets/overview-dark.png)
+![Hunter overview in Dark appearance with CW split offsets, recent contacts, and the Log to QRZ.com button](assets/overview-dark.png)
 
-Open **ClubLog Hunter → Settings…** from the macOS menu bar to configure the radio, Club Log, and appearance.
+Open **ClubLog Hunter → Settings…** from the macOS menu bar to configure the radio, Club Log, QRZ Logbook, and appearance.
 
-![Hunter Settings window in Dark appearance](assets/settings-dark.png)
+![Hunter Settings in Dark appearance with the QRZ Logbook API key field](assets/settings-dark.png)
 
 ## Build and launch
 
@@ -37,10 +37,16 @@ The build produces a locally signed app bundle.
 - The expedition menu loads callsigns from Club Log with a QSO in the last seven days. Hunter restores the last selected expedition when it is available. The manually configured callsigns are available at startup before the first successful fetch.
 - **Overview** reads active band and mode combinations and their latest reported frequencies from the public Club Log Livestream. The app checks the page every five seconds. **Refresh live activity** checks immediately, and **Livestream web** opens the same page in your browser.
 - **Last contacts** lists recent Livestream QSOs for the selected expedition, newest first. It follows the radio's band and Club Log mode group (CW, Phone, or Data). The app checks the radio every five seconds, including when you retune with the radio's controls. Each row shows the callsign, frequency in MHz when reported, and the logged mode. A dash marks a contact whose frequency was omitted.
-- Yellow cells show live activity. A cell displays **QRV** when the livestream reports activity without a frequency. Green cells show your worked slots and take precedence over yellow. The live indication disappears when the slot goes inactive or live data becomes unavailable.
+- Yellow cells show live activity. A cell displays **QRV** when the livestream reports activity without a frequency. Green cells show your worked slots and take precedence over yellow. The live indication disappears when the slot goes inactive, live data becomes unavailable, or the expedition has gone 10 minutes without a QSO according to Club Log’s Last QSO. Recent contacts remain visible while the stream is connected.
 - Click a frequency in the table to tune VFO A. Right-click a slot to save or edit its manual frequency. Click the saved cell to tune it, or use **Tune saved frequency** in its edit dialog when a live frequency takes precedence. For CW and Phone, `14.055 +5` means receive at 14.055 MHz and transmit at 14.060 MHz on VFO B. A negative offset works the same way. Data / FT8 always turns the radio's split off. CW and Phone turn it off when no offset is available.
 - Hunter checks [HamQTH](https://www.hamqth.com/dxc) for recent spots for the selected expedition. When the callsign, mode, band and receive frequency match, an explicit hint such as `UP 5`, `DOWN 2`, or `QSX 14060` appears beside the livestream frequency. A manual offset saved for the same receive frequency takes priority. Bare `UP` and ranges do not select a transmit frequency.
 - In **Settings → Appearance**, select **Light**, **Dark**, or **System** to follow the macOS setting. Hunter remembers your choice.
+
+## Log a QSO to QRZ.com
+
+1. Copy the API key for your logbook from QRZ.com Logbook Settings. The logbook owner needs a QRZ subscription at the XML level or higher. [QRZ Logbook API integration](https://www.qrz.com/docs/logbook30/api)
+2. In Hunter, enter it under **Settings → QRZ Logbook API key** and click **Save settings**. Hunter stores the key in the macOS Keychain.
+3. After a contact, click **Log to QRZ.com** below **Stop CW**. Review both callsigns, the UTC date and time, the band, and the mode. Click **Send to QRZ** to write the QSO to the logbook selected by the key.
 
 ## CW messages
 
